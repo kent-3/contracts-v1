@@ -1,0 +1,213 @@
+version: "3"
+services:
+  gaia_val1:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val1:/opt
+    ports:
+      - 127.0.0.1:26657:26657
+      - 127.0.0.1:1317:1317
+      - 127.0.0.1:9090:9090
+  gaia_val2:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val2:/opt
+  gaia_val3:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val3:/opt
+  gaia_val4:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val4:/opt
+  gaia_val5:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val5:/opt
+  gaia_val6:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val6:/opt
+  gaia_val7:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val7:/opt
+  gaia_val8:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val8:/opt
+  gaia_val9:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val9:/opt
+  gaia_val10:
+    image: gaia-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --log_level=debug
+      - --pruning=nothing
+      - --log_format=info
+      - --trace
+    entrypoint:
+      - gaiad
+    volumes:
+      - gaia_val10:/opt
+  neutron_ics:
+    image: neutron-amulet-0.0.1
+    command:
+      - start
+      - --home=/opt
+      - --pruning=nothing
+      - --log_format=json
+      - --log_level=info
+      - --trace
+    entrypoint:
+      - neutrond
+    volumes:
+      - neutron_ics:/opt
+    ports:
+      - 127.0.0.1:26658:26657
+      - 127.0.0.1:1318:1317
+      - 127.0.0.1:9091:9090
+  relayer_hermes0:
+    image: hermes-amulet-0.0.1
+    command:
+      - -c
+      - /root/start.sh
+    volumes:
+      - relayer_hermes0:/root
+    entrypoint:
+      - /bin/bash
+    depends_on:
+      - gaia_val1
+      - neutron_ics
+  relayer_neutron1:
+    image: neutron-relayer-amulet-0.0.1
+    entrypoint:
+      - ./run.sh
+    depends_on:
+      - gaia_val1
+      - neutron_ics
+    volumes:
+      - neutron_ics:/data
+    environment:
+      - NODE=neutron_ics
+      - LOGGER_LEVEL=info
+      - RELAYER_NEUTRON_CHAIN_CHAIN_PREFIX=neutron
+      - RELAYER_NEUTRON_CHAIN_RPC_ADDR=tcp://neutron_ics:26657
+      - RELAYER_NEUTRON_CHAIN_REST_ADDR=http://neutron_ics:1317
+      - RELAYER_NEUTRON_CHAIN_HOME_DIR=/data
+      - RELAYER_NEUTRON_CHAIN_SIGN_KEY_NAME=relayer_1
+      - RELAYER_NEUTRON_CHAIN_GAS_PRICES=0.5untrn
+      - RELAYER_NEUTRON_CHAIN_GAS_ADJUSTMENT=1.5
+      - RELAYER_NEUTRON_CHAIN_CONNECTION_ID=connection-0
+      - RELAYER_NEUTRON_CHAIN_DEBUG=true
+      - RELAYER_NEUTRON_CHAIN_ACCOUNT_PREFIX=neutron
+      - RELAYER_NEUTRON_CHAIN_KEYRING_BACKEND=test
+      - RELAYER_TARGET_CHAIN_RPC_ADDR=tcp://gaia_val1:26657
+      - RELAYER_TARGET_CHAIN_REST_ADDR=http://gaia_val1:1317
+      - RELAYER_TARGET_CHAIN_DENOM=stake
+      - RELAYER_TARGET_CHAIN_GAS_PRICES=0.5stake
+      - RELAYER_TARGET_CHAIN_ACCOUNT_PREFIX=cosmos
+      - RELAYER_TARGET_CHAIN_VALIDATOR_ACCOUNT_PREFIX=cosmosvaloper
+      - RELAYER_TARGET_CHAIN_DEBUG=true
+      - RELAYER_ALLOW_KV_CALLBACKS=true
+      - RELAYER_REGISTRY_ADDRESSES=
+      - RELAYER_ALLOW_TX_QUERIES=true
+      - RELAYER_STORAGE_PATH=/data/relayer/storage/leveldb
+      - RELAYER_LISTEN_ADDR=0.0.0.0:9999
+volumes:
+  gaia_val1: null
+  gaia_val2: null
+  gaia_val3: null
+  gaia_val4: null
+  gaia_val5: null
+  gaia_val6: null
+  gaia_val7: null
+  gaia_val8: null
+  gaia_val9: null
+  gaia_val10: null
+  neutron_ics: null
+  relayer_hermes0: null
