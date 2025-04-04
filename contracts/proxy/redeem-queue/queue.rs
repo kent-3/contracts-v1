@@ -162,6 +162,7 @@ impl<'a> RedemptionQueue<'a> {
             self.storage.set_queue_head(self.vault, index);
             self.storage.set_queue_tail(self.vault, index);
         } else {
+            // FIXME: unwrap
             // Append to tail
             let tail = self.storage.queue_tail(self.vault).unwrap();
 
@@ -314,6 +315,14 @@ impl<'a> RedemptionQueue<'a> {
                                 let (address, amount) = self.remove_entry(head)?;
                                 remaining -= amount;
                                 processed.push((address, amount));
+
+                                // TODO: is this the best solution for an empty queue, or should we
+                                // set the queue head and tail to None?
+
+                                // Don't continue if we've emptied the queue
+                                if self.entry_count() == 0 {
+                                    break;
+                                }
                             } else {
                                 // Process partial entry
                                 let address = entry.address;
@@ -329,10 +338,7 @@ impl<'a> RedemptionQueue<'a> {
                                 break;
                             }
                         }
-                        None => {
-                            // Corrupted queue state, remove invalid head
-                            let _ = self.remove_entry(head).ok();
-                        }
+                        None => break, // Entry not found for head index
                     }
                 }
                 None => break, // Empty queue

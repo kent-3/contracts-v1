@@ -76,6 +76,7 @@ pub fn handle_process_head(deps: DepsMut, vault: String) -> Result<Response, Err
 
     let (processed, used_amount) = queue.process_head(available_amount)?;
 
+    // TODO: is this the response we want?
     if processed.is_empty() {
         return Ok(Response::default());
     }
@@ -124,10 +125,13 @@ pub fn handle_redeem(
     let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
     let available_amount = Uint128::new(reserve_balance);
 
-    let process_response = {
+    // Check if the queue is empty before trying to process it
+    let process_response = if deps.storage.entry_count(&vault).unwrap_or(0) > 0 {
         let deps_branch = deps.branch();
-        handle_process_head(deps_branch, vault.clone())
-    }?;
+        handle_process_head(deps_branch, vault.clone())?
+    } else {
+        Response::default()
+    };
 
     let mut queue = RedemptionQueue::new(deps.storage, &vault);
     let index = queue.enqueue(&info.sender.to_string(), coin.amount)?;
