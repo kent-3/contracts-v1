@@ -162,6 +162,7 @@ pub fn handle_redeem(
         }
     }
 
+    // FIXME: The redeemed tokens don't seem to be sent to the user
     Ok(response)
 }
 
