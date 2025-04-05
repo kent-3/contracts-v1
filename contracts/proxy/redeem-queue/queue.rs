@@ -322,17 +322,18 @@ impl<'a> RedemptionQueue<'a> {
 
         // Process entries until we run out of funds or queue is empty
         while remaining > Uint128::zero() {
+            // TODO: is this the best way to handle an empty queue?
+            //
+            // Don't continue if we've emptied the queue
+            if self.entry_count() == 0 {
+                break;
+            }
+
             match self.storage.queue_head(self.vault) {
                 Some(head) => {
                     match self.get_entry(head) {
                         Some(entry) => {
                             if entry.amount <= remaining {
-                                // TODO: is this the best solution for an empty queue?
-                                // Don't continue if we've emptied the queue
-                                if self.entry_count() == 0 {
-                                    break;
-                                }
-
                                 // Process entire entry
                                 let (address, amount) = self.remove_entry(head)?;
                                 remaining -= amount;
