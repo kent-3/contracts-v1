@@ -325,6 +325,7 @@ impl<'a> RedemptionQueue<'a> {
             if self.entry_count() == 0 {
                 break; // Empty queue
             }
+
             match self.storage.queue_head(self.vault) {
                 Some(head) => {
                     match self.get_entry(head) {
