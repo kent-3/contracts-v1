@@ -322,13 +322,9 @@ impl<'a> RedemptionQueue<'a> {
 
         // Process entries until we run out of funds or queue is empty
         while remaining > Uint128::zero() {
-            // TODO: is this the best way to handle an empty queue?
-            //
-            // Don't continue if we've emptied the queue
             if self.entry_count() == 0 {
-                break;
+                break; // Empty queue
             }
-
             match self.storage.queue_head(self.vault) {
                 Some(head) => {
                     match self.get_entry(head) {
@@ -356,7 +352,7 @@ impl<'a> RedemptionQueue<'a> {
                         None => break, // Entry not found for head index
                     }
                 }
-                None => break, // Empty queue
+                None => break, // Empty or uninitialized queue
             }
         }
 
