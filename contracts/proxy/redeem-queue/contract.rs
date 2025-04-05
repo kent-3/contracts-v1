@@ -76,7 +76,8 @@ pub fn handle_process_head(deps: DepsMut, vault: String) -> Result<Response, Err
 
     let (processed, used_amount) = queue.process_head(available_amount)?;
 
-    // TODO: is this the response we want?
+    // TODO: Should we return an empty Response, or the "process_head" response with
+    // "processed_entries" and "used_amount" set to "0"?
     if processed.is_empty() {
         return Ok(Response::default());
     }
@@ -125,10 +126,11 @@ pub fn handle_redeem(
     let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
     let available_amount = Uint128::new(reserve_balance);
 
-    // Check if the queue is empty before trying to process it
-    let process_response = if deps.storage.entry_count(&vault).unwrap_or(0) > 0 {
-        let deps_branch = deps.branch();
-        handle_process_head(deps_branch, vault.clone())?
+    let entry_count = deps.storage.entry_count(&vault).unwrap_or(0);
+
+    // If the queue is not empty, the existing queue is processed first before adding the new entry.
+    let process_head_response = if entry_count > 0 {
+        handle_process_head(deps.branch(), vault.clone())?
     } else {
         Response::default()
     };
@@ -143,7 +145,7 @@ pub fn handle_redeem(
         .add_attribute("amount", coin.amount)
         .add_attribute("entry_index", index.to_string());
 
-    for msg in process_response.messages {
+    for msg in process_head_response.messages {
         response = response.add_submessage(msg);
     }
 
@@ -152,6 +154,7 @@ pub fn handle_redeem(
 
         if !processed.is_empty() {
             response = response
+                // TODO: are these attributes wanted?
                 .add_attribute("immediate_processed", processed.len().to_string())
                 .add_attribute("immediate_amount", used_amount);
 
@@ -162,7 +165,6 @@ pub fn handle_redeem(
         }
     }
 
-    // FIXME: The redeemed tokens don't seem to be sent to the user
     Ok(response)
 }
 
