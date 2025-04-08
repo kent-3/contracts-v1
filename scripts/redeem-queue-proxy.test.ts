@@ -5,6 +5,10 @@ import { StdFee } from "@cosmjs/stargate";
 import { coin } from "@cosmjs/proto-signing";
 import { ExecuteMsg as MintExecuteMsg } from "../ts/AmuletMint.types";
 import {
+  StateResponse as VaultStateResponse,
+  ClaimableResponse as VaultClaimableResponse,
+} from "../ts/AmuletGenericLst.types";
+import {
   ExecuteMsg as HubExecuteMsg,
   InstantiateMsg as HubInstantiateMsg,
   PositionResponse,
@@ -23,18 +27,29 @@ import {
   QueueEntryResponse,
 } from "../ts/RedeemQueueProxy.types";
 import {
+  QueryClient,
   HostClient,
   createFee,
+  createQueryClient,
   createHostClient,
   createHostWallet,
   initGenericLstVault,
+  toBeWithinN,
 } from "./test-helpers";
+
+function sharesValue(vaultState: VaultStateResponse, shares: any): bigint {
+  return (
+    (BigInt(shares) * BigInt(vaultState.total_deposits)) /
+    BigInt(vaultState.total_issued_shares)
+  );
+}
 
 const TOTAL_DEPOSIT_CAP = 1_000_000_000;
 const INDIVIDUAL_DEPOSIT_CAP = 600_000_000;
 const TOTAL_MINT_CAP = 1_000_000_000;
 
 let suite: ITestSuite;
+let hostQueryClient: QueryClient;
 let operatorAddress: string;
 let aliceAddress: string;
 let bobAddress: string;
@@ -83,6 +98,8 @@ describe("Deposit Cap Proxy", () => {
     operatorClient = await createHostClient(suite, operatorWallet);
     aliceClient = await createHostClient(suite, aliceWallet);
     bobClient = await createHostClient(suite, bobWallet);
+
+    hostQueryClient = await createQueryClient(suite.getHostRpc());
 
     gasFee = createFee(suite, 5_000_000);
   });
@@ -467,31 +484,39 @@ describe("Deposit Cap Proxy", () => {
   // });
 
   it("should allow Bob to make a small redemption that processes immediately", async () => {
-    // Get Bob's synthetic balance
     const syntheticBalance = await bobClient.getBalance(
       bobAddress,
       syntheticAssetDenom
     );
-    console.log("Bob's synthetic balance:", syntheticBalance.amount);
 
-    // Redeem a small amount (should process immediately)
-    const smallAmount = 5000;
+    const bobPreRedeemClaimable: VaultClaimableResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        claimable: { address: bobAddress },
+      });
 
-    // Get initial untrn balance
-    const initialBalance = await bobClient.getBalance(
-      bobAddress,
-      depositAssetDenom
+    const preRedeemMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
+        vault_metadata: { vault: vaultAddress },
+      });
+
+    const preRedeemVaultState: VaultStateResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        state: {},
+      });
+
+    const preRedeemSynthSupply = await hostQueryClient.bank.supplyOf(
+      `factory/${mintAddress}/amntrn`
     );
-    console.log("Bob's initial untrn balance:", initialBalance.amount);
 
-    // Execute redemption
+    const redeemAmount = 5000;
+
     const result = await bobClient.execute(
       bobAddress,
       redeemProxyAddress,
       { redeem: { vault: vaultAddress } },
       gasFee,
       "",
-      [coin(smallAmount, syntheticAssetDenom)]
+      [coin(redeemAmount, syntheticAssetDenom)]
     );
 
     // Check that the event log contains immediate processing marker
@@ -511,23 +536,69 @@ describe("Deposit Cap Proxy", () => {
 
     expect(queueEntries.entries.length).toBe(0);
 
-    // Get Bob's synthetic balance
     const newSyntheticBalance = await bobClient.getBalance(
       bobAddress,
       syntheticAssetDenom
     );
-    console.log("Bob's new synthetic balance:", newSyntheticBalance.amount);
 
-    // Bob should have received his underlying tokens
-    const finalBalance = await bobClient.getBalance(
-      bobAddress,
-      depositAssetDenom
+    expect(newSyntheticBalance.amount).toBe("999995000");
+
+    const bobPostRedeemClaimable: VaultClaimableResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        claimable: { address: bobAddress },
+      });
+
+    const postRedeemMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
+        vault_metadata: { vault: vaultAddress },
+      });
+
+    const postRedeemVaultState: VaultStateResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        state: {},
+      });
+
+    const postRedeemSynthSupply = await hostQueryClient.bank.supplyOf(
+      `factory/${mintAddress}/amntrn`
     );
-    console.log("Bob's new untrn balance:    ", finalBalance.amount);
 
-    // FIXME: Bob is not receiving his underlying tokens?
-    expect(+finalBalance.amount).toBeGreaterThan(
-      +initialBalance.amount - 150000
-    ); // Account for gas fees
+    expect(bobPostRedeemClaimable.amount).toBe("5000");
+
+    const expectedClaimable = Math.floor(Number(redeemAmount) / 1.0);
+
+    const bobClaimableIncrease =
+      +bobPostRedeemClaimable.amount - +bobPreRedeemClaimable.amount;
+
+    const reserveBalanceDecrease =
+      +preRedeemMetadata.reserve_balance - +postRedeemMetadata.reserve_balance;
+
+    const reserveSharesDecrease =
+      +preRedeemMetadata.reserve_shares - +postRedeemMetadata.reserve_shares;
+
+    const vaultDepositsDecrease =
+      +preRedeemVaultState.total_deposits -
+      +postRedeemVaultState.total_deposits;
+
+    const vaultSharesDecrease =
+      +preRedeemVaultState.total_issued_shares -
+      +postRedeemVaultState.total_issued_shares;
+
+    const synthSupplyDecrease =
+      +preRedeemSynthSupply.amount - +postRedeemSynthSupply.amount;
+
+    toBeWithinN(1, bobClaimableIncrease, expectedClaimable);
+    toBeWithinN(1, reserveBalanceDecrease, redeemAmount);
+    toBeWithinN(
+      1,
+      sharesValue(preRedeemVaultState, reserveSharesDecrease),
+      redeemAmount
+    );
+    toBeWithinN(2, vaultDepositsDecrease, redeemAmount);
+    toBeWithinN(
+      2,
+      sharesValue(preRedeemVaultState, vaultSharesDecrease),
+      redeemAmount
+    );
+    expect(synthSupplyDecrease).toBe(redeemAmount);
   });
 });
