@@ -36,6 +36,7 @@ import {
   initGenericLstVault,
   toBeWithinN,
 } from "./test-helpers";
+import { GENESIS_ALLOCATION } from "./suite/constants";
 
 function sharesValue(vaultState: VaultStateResponse, shares: any): bigint {
   return (
@@ -43,10 +44,6 @@ function sharesValue(vaultState: VaultStateResponse, shares: any): bigint {
     BigInt(vaultState.total_issued_shares)
   );
 }
-
-const TOTAL_DEPOSIT_CAP = 1_000_000_000;
-const INDIVIDUAL_DEPOSIT_CAP = 600_000_000;
-const TOTAL_MINT_CAP = 1_000_000_000;
 
 let suite: ITestSuite;
 let hostQueryClient: QueryClient;
@@ -60,19 +57,17 @@ let vaultCodeId: number;
 let mockOracleCodeId: number;
 let hubCodeId: number;
 let mintCodeId: number;
-let depositProxyCodeId: number;
 let redeemProxyCodeId: number;
 let vaultAddress: string;
 let mockOracleAddress: string;
 let hubAddress: string;
 let mintAddress: string;
-let depositProxyAddress: string;
 let redeemProxyAddress: string;
 let gasFee: StdFee;
 let depositAssetDenom: string = "untrn";
 let syntheticAssetDenom: string;
 
-describe("Deposit Cap Proxy", () => {
+describe("Redeem Queue Proxy", () => {
   beforeAll(async () => {
     suite = await TestSuite.create({
       networkOverrides: {
@@ -136,13 +131,6 @@ describe("Deposit Cap Proxy", () => {
     mintCodeId = res.codeId;
   });
 
-  it("should upload the desosit-cap-proxy contract byte code", async () => {
-    const wasmFilePath = artifact("deposit-cap-proxy");
-    const wasmBytes = await readContractFileBytes(wasmFilePath);
-    const res = await operatorClient.upload(operatorAddress, wasmBytes, gasFee);
-    depositProxyCodeId = res.codeId;
-  });
-
   it("should upload the redeem-queue-proxy contract byte code", async () => {
     const wasmFilePath = artifact("redeem-queue-proxy");
     const wasmBytes = await readContractFileBytes(wasmFilePath);
@@ -198,40 +186,6 @@ describe("Deposit Cap Proxy", () => {
     );
 
     hubAddress = res.contractAddress;
-  });
-
-  it("should deploy the deposit-cap-proxy", async () => {
-    const msg: DepositProxyInstantiateMsg = {
-      hub_address: hubAddress,
-    };
-
-    const res = await operatorClient.instantiate(
-      operatorAddress,
-      depositProxyCodeId,
-      msg,
-      "deposit-cap-proxy",
-      gasFee
-    );
-
-    depositProxyAddress = res.contractAddress;
-  });
-
-  it("should configure deposit-cap-proxy caps for the vault", async () => {
-    const msg: DepositProxyExecuteMsg = {
-      set_config: {
-        vault: vaultAddress,
-        total_deposit_cap: String(TOTAL_DEPOSIT_CAP),
-        individual_deposit_cap: String(INDIVIDUAL_DEPOSIT_CAP),
-        total_mint_cap: String(TOTAL_MINT_CAP),
-      },
-    };
-
-    await operatorClient.execute(
-      operatorAddress,
-      depositProxyAddress,
-      msg,
-      gasFee
-    );
   });
 
   it("should deploy the redeem-queue-proxy", async () => {
@@ -308,12 +262,49 @@ describe("Deposit Cap Proxy", () => {
     }
   });
 
-  it("should configure the deposit and mint and redeem proxy for the vault", async () => {
+  it("should configure the fixed advance fee to 100 bps (1%)", async () => {
+    await operatorClient.execute(
+      operatorAddress,
+      hubAddress,
+      {
+        set_fixed_advance_fee: { vault: vaultAddress, bps: 100 },
+      },
+      gasFee
+    );
+
+    const vaultMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
+        vault_metadata: { vault: vaultAddress },
+      });
+
+    expect(vaultMetadata.fixed_advance_fee_bps).toBe(100);
+  });
+
+  it("should configure the advance fee recipient to be the operator address", async () => {
+    await operatorClient.execute(
+      operatorAddress,
+      hubAddress,
+      {
+        set_advance_fee_recipient: {
+          vault: vaultAddress,
+          recipient: operatorAddress,
+        },
+      } as HubExecuteMsg,
+      gasFee
+    );
+
+    const vaultMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
+        vault_metadata: { vault: vaultAddress },
+      });
+
+    expect(vaultMetadata.advance_fee_recipient).toBe(operatorAddress);
+  });
+
+  it("should configure the redeem proxy for the vault", async () => {
     const msg: HubExecuteMsg = {
       set_proxy_config: {
         vault: vaultAddress,
-        deposit: depositProxyAddress,
-        mint: depositProxyAddress,
         redeem: redeemProxyAddress,
       },
     };
@@ -321,16 +312,16 @@ describe("Deposit Cap Proxy", () => {
     await operatorClient.execute(operatorAddress, hubAddress, msg, gasFee);
   });
 
-  it("alice makes the initial deposit via the proxy", async () => {
-    const depositAmount = INDIVIDUAL_DEPOSIT_CAP;
+  it("alice makes a deposit while the redemption rate is 1.0", async () => {
+    const depositAmount = GENESIS_ALLOCATION / 10;
 
     await aliceClient.execute(
       aliceAddress,
-      depositProxyAddress,
+      hubAddress,
       { deposit: { vault: vaultAddress } },
       gasFee,
       "",
-      [coin(depositAmount, depositAssetDenom)]
+      [coin(depositAmount, "untrn")]
     );
 
     const position: PositionResponse = await operatorClient.queryContractSmart(
@@ -338,126 +329,213 @@ describe("Deposit Cap Proxy", () => {
       { position: { account: aliceAddress, vault: vaultAddress } }
     );
 
-    expect(+position.collateral).toBe(INDIVIDUAL_DEPOSIT_CAP);
-
-    const proxyMetadata: MetadataResponse =
-      await operatorClient.queryContractSmart(depositProxyAddress, {
-        vault_metadata: { vault: vaultAddress },
-      });
-
-    expect(+proxyMetadata.total_deposit).toBe(INDIVIDUAL_DEPOSIT_CAP);
-
-    const depositAmountRes: DepositAmountResponse =
-      await operatorClient.queryContractSmart(depositProxyAddress, {
-        deposit_amount: { vault: vaultAddress, account: aliceAddress },
-      });
-
-    expect(+depositAmountRes.amount).toBe(INDIVIDUAL_DEPOSIT_CAP);
+    expect(+position.collateral).toBe(depositAmount);
   });
 
-  it("bob cannot deposit more than the total cap", async () => {
-    const depositAmount = INDIVIDUAL_DEPOSIT_CAP;
+  it("alice takes an advance while the redemption rate is still 1.0", async () => {
+    const advanceAmount = GENESIS_ALLOCATION / 10 / 2;
 
-    expect(async () => {
-      await bobClient.execute(
-        bobAddress,
-        depositProxyAddress,
-        { deposit: { vault: vaultAddress } },
-        gasFee,
-        "",
-        [coin(depositAmount, depositAssetDenom)]
-      );
-    }).toThrow("total deposit cap exceeded");
+    const advanceFeeAmount = advanceAmount / 100;
+
+    await aliceClient.execute(
+      aliceAddress,
+      hubAddress,
+      {
+        advance: { vault: vaultAddress, amount: String(advanceAmount) },
+      },
+      gasFee
+    );
+
+    const position: PositionResponse = await operatorClient.queryContractSmart(
+      hubAddress,
+      { position: { account: aliceAddress, vault: vaultAddress } }
+    );
+
+    const aliceSynthBalance = await hostQueryClient.bank.balance(
+      aliceAddress,
+      `factory/${mintAddress}/amntrn`
+    );
+
+    const operatorSynthBalance = await hostQueryClient.bank.balance(
+      operatorAddress,
+      `factory/${mintAddress}/amntrn`
+    );
+
+    expect(+position.debt).toBe(advanceAmount);
+    toBeWithinN(1, +aliceSynthBalance.amount, advanceAmount - advanceFeeAmount);
+    toBeWithinN(1, +operatorSynthBalance.amount, advanceFeeAmount);
   });
 
-  it("bob can mint up to the total cap via the proxy", async () => {
-    const depositAmount = TOTAL_MINT_CAP;
+  it("bob makes a deposit while the redemption rate is 1.0", async () => {
+    const depositAmount = GENESIS_ALLOCATION / 10;
 
     await bobClient.execute(
       bobAddress,
-      depositProxyAddress,
-      { mint: { vault: vaultAddress } },
+      hubAddress,
+      { deposit: { vault: vaultAddress } },
       gasFee,
       "",
-      [coin(depositAmount, depositAssetDenom)]
+      [coin(depositAmount, "untrn")]
     );
 
-    const syntheticBalance = await operatorClient.getBalance(
+    const position: PositionResponse = await operatorClient.queryContractSmart(
+      hubAddress,
+      { position: { account: bobAddress, vault: vaultAddress } }
+    );
+
+    expect(+position.collateral).toBe(depositAmount);
+  });
+
+  it("bob takes an advance while the redemption rate is still 1.0", async () => {
+    const advanceAmount = GENESIS_ALLOCATION / 10 / 2;
+
+    const advanceFeeAmount = advanceAmount / 100;
+
+    await bobClient.execute(
       bobAddress,
-      syntheticAssetDenom
+      hubAddress,
+      {
+        advance: { vault: vaultAddress, amount: String(advanceAmount) },
+      },
+      gasFee
     );
 
-    expect(+syntheticBalance.amount).toBeGreaterThan(0);
+    const position: PositionResponse = await operatorClient.queryContractSmart(
+      hubAddress,
+      { position: { account: bobAddress, vault: vaultAddress } }
+    );
 
-    const proxyMetadata: MetadataResponse =
-      await operatorClient.queryContractSmart(depositProxyAddress, {
+    const bobSynthBalance = await hostQueryClient.bank.balance(
+      bobAddress,
+      `factory/${mintAddress}/amntrn`
+    );
+
+    expect(+position.debt).toBe(advanceAmount);
+    toBeWithinN(1, +bobSynthBalance.amount, advanceAmount - advanceFeeAmount);
+  });
+
+  it("set the redemption rate to 1.1 (10% increase in value)", async () => {
+    await operatorClient.execute(
+      operatorAddress,
+      mockOracleAddress,
+      {
+        set_redemption_rate: {
+          rate: "1.1",
+        },
+      },
+      gasFee
+    );
+  });
+
+  it("alice evaluates her position after the redemption rate increase", async () => {
+    await aliceClient.execute(
+      aliceAddress,
+      hubAddress,
+      { evaluate: { vault: vaultAddress } },
+      gasFee
+    );
+
+    const position: PositionResponse = await operatorClient.queryContractSmart(
+      hubAddress,
+      { position: { account: aliceAddress, vault: vaultAddress } }
+    );
+
+    const vaultMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
         vault_metadata: { vault: vaultAddress },
       });
 
-    expect(+proxyMetadata.total_mint).toBe(TOTAL_MINT_CAP);
+    const vaultState: VaultStateResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        state: {},
+      });
+
+    const collateral = +position.collateral;
+    const totalYield = collateral * 0.1;
+    const debtPayment = totalYield * 0.9;
+
+    const expectedDebt = collateral / 2 - debtPayment;
+
+    const aggregateHubSharesBalances =
+      BigInt(vaultMetadata.collateral_shares) +
+      BigInt(vaultMetadata.reserve_shares) +
+      BigInt(vaultMetadata.treasury_shares) +
+      BigInt(vaultMetadata.amo_shares);
+
+    expect(aggregateHubSharesBalances).toBe(
+      BigInt(vaultState.total_issued_shares)
+    );
+
+    toBeWithinN(1, +position.debt, expectedDebt);
+    toBeWithinN(1, +vaultMetadata.reserve_balance, debtPayment * 2);
+
+    const expectedTreasuryPaymentValue =
+      BigInt(totalYield) - BigInt(debtPayment);
+
+    const treasurySharesValue =
+      (BigInt(vaultMetadata.treasury_shares) *
+        BigInt(vaultState.total_deposits)) /
+      BigInt(vaultState.total_issued_shares);
+
+    toBeWithinN(1, treasurySharesValue, expectedTreasuryPaymentValue * 2n);
   });
 
-  it("alice can no longer mint any assets via the proxy", async () => {
-    const depositAmount = INDIVIDUAL_DEPOSIT_CAP;
+  it("bob evaluates his position after the redemption rate increase", async () => {
+    await bobClient.execute(
+      bobAddress,
+      hubAddress,
+      { evaluate: { vault: vaultAddress } },
+      gasFee
+    );
 
-    expect(async () => {
-      await aliceClient.execute(
-        aliceAddress,
-        depositProxyAddress,
-        { mint: { vault: vaultAddress } },
-        gasFee,
-        "",
-        [coin(depositAmount, depositAssetDenom)]
-      );
-    }).toThrow("total mint cap exceeded");
+    const position: PositionResponse = await operatorClient.queryContractSmart(
+      hubAddress,
+      { position: { account: bobAddress, vault: vaultAddress } }
+    );
+
+    const vaultMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
+        vault_metadata: { vault: vaultAddress },
+      });
+
+    const vaultState: VaultStateResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        state: {},
+      });
+
+    const collateral = +position.collateral;
+    const totalYield = collateral * 0.1;
+    const debtPayment = totalYield * 0.9;
+
+    const expectedDebt = collateral / 2 - debtPayment;
+
+    const aggregateHubSharesBalances =
+      BigInt(vaultMetadata.collateral_shares) +
+      BigInt(vaultMetadata.reserve_shares) +
+      BigInt(vaultMetadata.treasury_shares) +
+      BigInt(vaultMetadata.amo_shares);
+
+    expect(aggregateHubSharesBalances).toBe(
+      BigInt(vaultState.total_issued_shares)
+    );
+
+    toBeWithinN(1, +position.debt, expectedDebt);
+    toBeWithinN(1, +vaultMetadata.reserve_balance, debtPayment * 2);
+
+    const expectedTreasuryPaymentValue =
+      BigInt(totalYield) - BigInt(debtPayment);
+
+    const treasurySharesValue =
+      (BigInt(vaultMetadata.treasury_shares) *
+        BigInt(vaultState.total_deposits)) /
+      BigInt(vaultState.total_issued_shares);
+
+    toBeWithinN(1, treasurySharesValue, expectedTreasuryPaymentValue * 2n);
   });
 
-  it("cannot mint directly with the hub", async () => {
-    const depositAmount = INDIVIDUAL_DEPOSIT_CAP;
+  // --- Begin redeem-queue specific tests
 
-    expect(async () => {
-      await aliceClient.execute(
-        aliceAddress,
-        hubAddress,
-        { mint: { vault: vaultAddress } },
-        gasFee,
-        "",
-        [coin(depositAmount, depositAssetDenom)]
-      );
-    }).toThrow("unauthorized");
-  });
-
-  it("cannot deposit directly with the hub", async () => {
-    const depositAmount = INDIVIDUAL_DEPOSIT_CAP;
-
-    expect(async () => {
-      await aliceClient.execute(
-        aliceAddress,
-        hubAddress,
-        { deposit: { vault: vaultAddress } },
-        gasFee,
-        "",
-        [coin(depositAmount, depositAssetDenom)]
-      );
-    }).toThrow("unauthorized");
-  });
-
-  it("non-admin cannot alter config", async () => {
-    const msg: DepositProxyExecuteMsg = {
-      set_config: {
-        vault: vaultAddress,
-        total_deposit_cap: String(TOTAL_DEPOSIT_CAP * 2),
-        individual_deposit_cap: String(INDIVIDUAL_DEPOSIT_CAP * 2),
-        total_mint_cap: String(TOTAL_MINT_CAP * 2),
-      },
-    };
-
-    expect(async () => {
-      await aliceClient.execute(aliceAddress, depositProxyAddress, msg, gasFee);
-    }).toThrow("unauthorized");
-  });
-
-  it("initial queue is empty", async () => {
+  it("should start with an empty queue", async () => {
     const queueEntries: QueueEntriesResponse =
       await operatorClient.queryContractSmart(redeemProxyAddress, {
         all_queue_entries: { vault: vaultAddress },
@@ -466,32 +544,10 @@ describe("Deposit Cap Proxy", () => {
     expect(queueEntries.entries.length).toBe(0);
   });
 
-  // it("vault has sufficient redemption reserves", async () => {
-  //   // Check vault metadata to make sure there are enough reserves
-  //   const vaultMetadata: VaultMetadata =
-  //     await operatorClient.queryContractSmart(hubAddress, {
-  //       vault_metadata: { vault: vaultAddress },
-  //     });
-  //
-  //   console.log("Vault collateral balance:", vaultMetadata.collateral_balance);
-  //   console.log("Vault reserve balance:", vaultMetadata.reserve_balance);
-  //
-  //   // We should have collateral since we've made deposits
-  //   expect(+vaultMetadata.collateral_balance).toBeGreaterThan(0);
-  //
-  //   // We should have reserves since we've minted synthetics
-  //   expect(+vaultMetadata.reserve_balance).toBeGreaterThan(0);
-  // });
-
-  it("should allow Bob to make a small redemption that processes immediately", async () => {
-    const syntheticBalance = await bobClient.getBalance(
-      bobAddress,
-      syntheticAssetDenom
-    );
-
-    const bobPreRedeemClaimable: VaultClaimableResponse =
+  it("should allow alice to make a small redemption that processes immediately", async () => {
+    const alicePreRedeemClaimable: VaultClaimableResponse =
       await operatorClient.queryContractSmart(vaultAddress, {
-        claimable: { address: bobAddress },
+        claimable: { address: aliceAddress },
       });
 
     const preRedeemMetadata: VaultMetadata =
@@ -505,13 +561,13 @@ describe("Deposit Cap Proxy", () => {
       });
 
     const preRedeemSynthSupply = await hostQueryClient.bank.supplyOf(
-      `factory/${mintAddress}/amntrn`
+      syntheticAssetDenom
     );
 
-    const redeemAmount = 5000;
+    const redeemAmount = 1000000;
 
-    const result = await bobClient.execute(
-      bobAddress,
+    const result = await aliceClient.execute(
+      aliceAddress,
       redeemProxyAddress,
       { redeem: { vault: vaultAddress } },
       gasFee,
@@ -536,16 +592,9 @@ describe("Deposit Cap Proxy", () => {
 
     expect(queueEntries.entries.length).toBe(0);
 
-    const newSyntheticBalance = await bobClient.getBalance(
-      bobAddress,
-      syntheticAssetDenom
-    );
-
-    expect(newSyntheticBalance.amount).toBe("999995000");
-
-    const bobPostRedeemClaimable: VaultClaimableResponse =
+    const alicePostRedeemClaimable: VaultClaimableResponse =
       await operatorClient.queryContractSmart(vaultAddress, {
-        claimable: { address: bobAddress },
+        claimable: { address: aliceAddress },
       });
 
     const postRedeemMetadata: VaultMetadata =
@@ -559,15 +608,13 @@ describe("Deposit Cap Proxy", () => {
       });
 
     const postRedeemSynthSupply = await hostQueryClient.bank.supplyOf(
-      `factory/${mintAddress}/amntrn`
+      syntheticAssetDenom
     );
 
-    expect(bobPostRedeemClaimable.amount).toBe("5000");
+    const expectedClaimable = Math.floor(Number(redeemAmount) / 1.1);
 
-    const expectedClaimable = Math.floor(Number(redeemAmount) / 1.0);
-
-    const bobClaimableIncrease =
-      +bobPostRedeemClaimable.amount - +bobPreRedeemClaimable.amount;
+    const aliceClaimableIncrease =
+      +alicePostRedeemClaimable.amount - +alicePreRedeemClaimable.amount;
 
     const reserveBalanceDecrease =
       +preRedeemMetadata.reserve_balance - +postRedeemMetadata.reserve_balance;
@@ -586,7 +633,7 @@ describe("Deposit Cap Proxy", () => {
     const synthSupplyDecrease =
       +preRedeemSynthSupply.amount - +postRedeemSynthSupply.amount;
 
-    toBeWithinN(1, bobClaimableIncrease, expectedClaimable);
+    toBeWithinN(1, aliceClaimableIncrease, expectedClaimable);
     toBeWithinN(1, reserveBalanceDecrease, redeemAmount);
     toBeWithinN(
       1,
@@ -601,4 +648,404 @@ describe("Deposit Cap Proxy", () => {
     );
     expect(synthSupplyDecrease).toBe(redeemAmount);
   });
+
+  it("should create a queue entry when alice redeems more than available reserves", async () => {
+    // Get the current reserve balance
+    const vaultMetadata = await operatorClient.queryContractSmart(hubAddress, {
+      vault_metadata: { vault: vaultAddress },
+    });
+
+    // Calculate an amount slightly more than available reserves
+    const redeemAmount = Number(vaultMetadata.reserve_balance) + 5000;
+
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(redeemAmount, syntheticAssetDenom)]
+    );
+
+    // Check queue - should have an entry now
+    const queueEntries = await operatorClient.queryContractSmart(
+      redeemProxyAddress,
+      { all_queue_entries: { vault: vaultAddress } }
+    );
+
+    expect(queueEntries.entries.length).toBe(1);
+    expect(queueEntries.entries[0].address).toBe(aliceAddress);
+
+    // The amount in the queue should be the portion that couldn't be immediately processed
+    const queuedAmount = Number(queueEntries.entries[0].amount);
+
+    expect(queuedAmount).toBeGreaterThan(0);
+    expect(queuedAmount).toBeLessThanOrEqual(5000);
+  });
+
+  it("should create a queue entry when bob tries to redeem anything", async () => {
+    const redeemAmount = 5000;
+
+    await bobClient.execute(
+      bobAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(redeemAmount, syntheticAssetDenom)]
+    );
+
+    // Check queue - should have two entries now
+    const queueEntries = await operatorClient.queryContractSmart(
+      redeemProxyAddress,
+      { all_queue_entries: { vault: vaultAddress } }
+    );
+
+    console.log("Queue Entries: ", JSON.stringify(queueEntries));
+
+    expect(queueEntries.entries.length).toBe(2);
+    expect(queueEntries.entries[1].address).toBe(bobAddress);
+
+    const queuedAmount = Number(queueEntries.entries[0].amount);
+
+    // The amount in the queue should be the sum of Alice and Bob redeem amounts.
+    expect(queuedAmount).toBeGreaterThan(0);
+    expect(queuedAmount).toBeLessThanOrEqual(10000);
+  });
+
+  it("should correctly calculate position and amount in front for queue entries", async () => {
+    // Check the position of Bob's entry
+    const bobEntryIndex = 2; // Third entry is Bob's
+    const bobEntry: QueueEntryResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        queue_entry: { vault: vaultAddress, index: bobEntryIndex },
+      });
+
+    expect(bobEntry.position_in_queue).toBe(1); // Position is zero-indexed
+    expect(Number(bobEntry.amount_in_front)).toBeGreaterThan(0);
+
+    console.log("Bob Entry: ", JSON.stringify(bobEntry));
+  });
+
+  it("should allow Bob to view all his queue entries", async () => {
+    const bobEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: bobAddress },
+      });
+
+    expect(bobEntries.entries.length).toBe(1);
+    expect(bobEntries.entries[0].address).toBe(bobAddress);
+
+    console.log("Bob Entries: ", JSON.stringify(bobEntries));
+  });
+
+  it("should allow Alice to cancel her redemption queue entry", async () => {
+    const aliceEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+      });
+
+    console.log("Alice Entries: ", JSON.stringify(aliceEntries));
+
+    const aliceEntryIndex = aliceEntries.entries[1].index;
+    const aliceEntryAmount = aliceEntries.entries[1].amount;
+
+    const preBalance = await aliceClient.getBalance(
+      aliceAddress,
+      syntheticAssetDenom
+    );
+
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { cancel_entry: { vault: vaultAddress, index: aliceEntryIndex } },
+      gasFee
+    );
+
+    const postBalance = await aliceClient.getBalance(
+      aliceAddress,
+      syntheticAssetDenom
+    );
+    expect(BigInt(postBalance.amount) - BigInt(preBalance.amount)).toBe(
+      BigInt(aliceEntryAmount)
+    );
+
+    // Queue should now only have Bob's entry
+    const queueEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        all_queue_entries: { vault: vaultAddress },
+      });
+
+    console.log("Queue Entries: ", JSON.stringify(queueEntries));
+
+    expect(queueEntries.entries.length).toBe(1);
+    expect(queueEntries.entries[0].address).toBe(bobAddress);
+  });
+
+  // FIXME: "redemption too small" error
+  it("should process queue head when reserves become available", async () => {
+    // Add more reserves to the vault
+    const repayAmount = 10000;
+    await aliceClient.execute(
+      aliceAddress,
+      hubAddress,
+      { repay_synthetic: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(repayAmount, syntheticAssetDenom)]
+    );
+
+    console.log("added reserves to the vault");
+
+    // Process the queue
+    await operatorClient.execute(
+      operatorAddress,
+      redeemProxyAddress,
+      { process_head: { vault: vaultAddress } },
+      gasFee
+    );
+
+    // The queue should now be empty or reduced
+    const queueEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        all_queue_entries: { vault: vaultAddress },
+      });
+
+    // Repay amount was enough to fully process Alice's and Bob's entry
+    expect(queueEntries.entries.length).toBe(0);
+
+    const aliceClaimable: VaultClaimableResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        claimable: { address: aliceAddress },
+      });
+
+    expect(Number(aliceClaimable.amount)).toBe(5000);
+
+    const bobClaimable: VaultClaimableResponse =
+      await operatorClient.queryContractSmart(vaultAddress, {
+        claimable: { address: bobAddress },
+      });
+
+    expect(Number(bobClaimable.amount)).toBe(5000);
+  });
+
+  // it("should allow Alice to cancel all her redemption entries", async () => {
+  //   // Let's add more entries for Alice
+  //   for (let i = 0; i < 2; i++) {
+  //     await aliceClient.execute(
+  //       aliceAddress,
+  //       redeemProxyAddress,
+  //       { redeem: { vault: vaultAddress } },
+  //       gasFee,
+  //       "",
+  //       [coin(10000, syntheticAssetDenom)]
+  //     );
+  //   }
+  //
+  //   // Verify Alice has an entry
+  //   const aliceEntriesBefore: QueueEntriesResponse =
+  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
+  //       owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+  //     });
+  //
+  //   console.log("Alice Entries Before:", aliceEntriesBefore);
+  //
+  //   expect(aliceEntriesBefore.entries.length).toBeGreaterThanOrEqual(1);
+  //
+  //   const preBalance = await aliceClient.getBalance(
+  //     aliceAddress,
+  //     syntheticAssetDenom
+  //   );
+  //
+  //   // Cancel all entries
+  //   await aliceClient.execute(
+  //     aliceAddress,
+  //     redeemProxyAddress,
+  //     { cancel_all: { vault: vaultAddress } },
+  //     gasFee
+  //   );
+  //
+  //   // Check that all entries are gone
+  //   const aliceEntriesAfter: QueueEntriesResponse =
+  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
+  //       owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+  //     });
+  //
+  //   expect(aliceEntriesAfter.entries.length).toBe(0);
+  //
+  //   const postBalance = await aliceClient.getBalance(
+  //     aliceAddress,
+  //     syntheticAssetDenom
+  //   );
+  //   expect(BigInt(postBalance.amount)).toBeGreaterThan(
+  //     BigInt(preBalance.amount)
+  //   );
+  // });
+
+  // it("should allow admin to force cancel an entry", async () => {
+  //   // Add an entry for Bob again
+  //   await bobClient.execute(
+  //     bobAddress,
+  //     redeemProxyAddress,
+  //     { redeem: { vault: vaultAddress } },
+  //     gasFee,
+  //     "",
+  //     [coin(50000, syntheticAssetDenom)]
+  //   );
+  //
+  //   // Get Bob's entry index
+  //   const bobEntries: QueueEntriesResponse =
+  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
+  //       owner_queue_entries: { vault: vaultAddress, address: bobAddress },
+  //     });
+  //
+  //   const bobEntryIndex = bobEntries.entries[0].index;
+  //   const preBalance = await bobClient.getBalance(
+  //     bobAddress,
+  //     syntheticAssetDenom
+  //   );
+  //
+  //   // Admin force cancels the entry
+  //   await operatorClient.execute(
+  //     operatorAddress,
+  //     redeemProxyAddress,
+  //     { force_cancel_entry: { vault: vaultAddress, index: bobEntryIndex } },
+  //     gasFee
+  //   );
+  //
+  //   // Verify entry is gone
+  //   const queueEntries: QueueEntriesResponse =
+  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
+  //       all_queue_entries: { vault: vaultAddress },
+  //     });
+  //
+  //   expect(
+  //     queueEntries.entries.find((e) => e.index === bobEntryIndex)
+  //   ).toBeUndefined();
+  //
+  //   const postBalance = await bobClient.getBalance(
+  //     bobAddress,
+  //     syntheticAssetDenom
+  //   );
+  //   expect(BigInt(postBalance.amount)).toBeGreaterThan(
+  //     BigInt(preBalance.amount)
+  //   );
+  // });
+
+  it("should not allow non-admin to force cancel entries", async () => {
+    // Get Bob's entry
+    const bobEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: bobAddress },
+      });
+
+    console.log("Bob Entries: ", JSON.stringify(bobEntries));
+
+    const bobEntryIndex = bobEntries.entries.at(-1)!.index;
+
+    // Bob tries to force cancel (should fail)
+    expect(async () => {
+      await bobClient.execute(
+        bobAddress,
+        redeemProxyAddress,
+        { force_cancel_entry: { vault: vaultAddress, index: bobEntryIndex } },
+        gasFee
+      );
+    }).toThrow("unauthorized");
+  });
+
+  // it("should not allow users to cancel other user's entries", async () => {
+  //   // Add an entry for Alice
+  //   await aliceClient.execute(
+  //     aliceAddress,
+  //     redeemProxyAddress,
+  //     { redeem: { vault: vaultAddress } },
+  //     gasFee,
+  //     "",
+  //     [coin(10000, syntheticAssetDenom)]
+  //   );
+  //
+  //   // Get Alice's entry
+  //   const aliceEntries: QueueEntriesResponse =
+  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
+  //       owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+  //     });
+  //
+  //   console.log("Alice Entries: ", JSON.stringify(aliceEntries));
+  //
+  //   const aliceEntryIndex = aliceEntries.entries.at(-1)!.index;
+  //
+  //   // Bob tries to cancel Alice's entry (should fail)
+  //   expect(async () => {
+  //     await bobClient.execute(
+  //       bobAddress,
+  //       redeemProxyAddress,
+  //       { cancel_entry: { vault: vaultAddress, index: aliceEntryIndex } },
+  //       gasFee
+  //     );
+  //   }).toThrow("does not belong to");
+  // });
+
+  // it("should handle cancelling non-existent entries", async () => {
+  //   const nonExistentIndex = 999999;
+  //
+  //   // Try to cancel a non-existent entry
+  //   expect(async () => {
+  //     await bobClient.execute(
+  //       bobAddress,
+  //       redeemProxyAddress,
+  //       { cancel_entry: { vault: vaultAddress, index: nonExistentIndex } },
+  //       gasFee
+  //     );
+  //   }).toThrow("not found");
+  // });
+  //
+  // it("should handle redeeming when reserves are completely empty", async () => {
+  //   // First, ensure reserves are empty by processing any queued redemptions
+  //   const vaultMetadata: VaultMetadata =
+  //     await operatorClient.queryContractSmart(hubAddress, {
+  //       vault_metadata: { vault: vaultAddress },
+  //     });
+  //
+  //   if (Number(vaultMetadata.reserve_balance) > 0) {
+  //     // Redeem all available reserves
+  //     await bobClient.execute(
+  //       bobAddress,
+  //       redeemProxyAddress,
+  //       { redeem: { vault: vaultAddress } },
+  //       gasFee,
+  //       "",
+  //       [coin(vaultMetadata.reserve_balance, syntheticAssetDenom)]
+  //     );
+  //
+  //     // Process any queue
+  //     await operatorClient.execute(
+  //       operatorAddress,
+  //       redeemProxyAddress,
+  //       { process_head: { vault: vaultAddress } },
+  //       gasFee
+  //     );
+  //   }
+  //
+  //   // Now try to redeem with empty reserves
+  //   await bobClient.execute(
+  //     bobAddress,
+  //     redeemProxyAddress,
+  //     { redeem: { vault: vaultAddress } },
+  //     gasFee,
+  //     "",
+  //     [coin(5000, syntheticAssetDenom)]
+  //   );
+  //
+  //   // Should have an entry in the queue now
+  //   const queueEntries: QueueEntriesResponse =
+  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
+  //       all_queue_entries: { vault: vaultAddress },
+  //     });
+  //
+  //   expect(queueEntries.entries.length).toBeGreaterThan(0);
+  //   expect(queueEntries.entries.some((e) => e.address === bobAddress)).toBe(
+  //     true
+  //   );
+  // });
 });
