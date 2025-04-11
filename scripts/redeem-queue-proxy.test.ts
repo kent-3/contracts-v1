@@ -780,7 +780,7 @@ describe("Redeem Queue Proxy", () => {
       { mint: { vault: vaultAddress } },
       gasFee,
       "",
-      [coin(2_000_000, depositAssetDenom)]
+      [coin(1_000_000, depositAssetDenom)]
     );
 
     // Process the queue (should only have Bob's entry)
@@ -797,7 +797,7 @@ describe("Redeem Queue Proxy", () => {
         all_queue_entries: { vault: vaultAddress },
       });
 
-    // Repay amount was enough to fully process Bob's entry
+    // Reserve amount was enough to fully process Bob's entry
     expect(queueEntries.entries.length).toBe(0);
 
     const bobClaimable: VaultClaimableResponse =
@@ -810,58 +810,61 @@ describe("Redeem Queue Proxy", () => {
     toBeWithinN(1, Number(bobClaimable.amount), expectedClaimable);
   });
 
-  // it("should allow Alice to cancel all her redemption entries", async () => {
-  //   // Let's add more entries for Alice
-  //   for (let i = 0; i < 2; i++) {
-  //     await aliceClient.execute(
-  //       aliceAddress,
-  //       redeemProxyAddress,
-  //       { redeem: { vault: vaultAddress } },
-  //       gasFee,
-  //       "",
-  //       [coin(10000, syntheticAssetDenom)]
-  //     );
-  //   }
-  //
-  //   // Verify Alice has an entry
-  //   const aliceEntriesBefore: QueueEntriesResponse =
-  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
-  //       owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
-  //     });
-  //
-  //   console.log("Alice Entries Before:", aliceEntriesBefore);
-  //
-  //   expect(aliceEntriesBefore.entries.length).toBeGreaterThanOrEqual(1);
-  //
-  //   const preBalance = await aliceClient.getBalance(
-  //     aliceAddress,
-  //     syntheticAssetDenom
-  //   );
-  //
-  //   // Cancel all entries
-  //   await aliceClient.execute(
-  //     aliceAddress,
-  //     redeemProxyAddress,
-  //     { cancel_all: { vault: vaultAddress } },
-  //     gasFee
-  //   );
-  //
-  //   // Check that all entries are gone
-  //   const aliceEntriesAfter: QueueEntriesResponse =
-  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
-  //       owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
-  //     });
-  //
-  //   expect(aliceEntriesAfter.entries.length).toBe(0);
-  //
-  //   const postBalance = await aliceClient.getBalance(
-  //     aliceAddress,
-  //     syntheticAssetDenom
-  //   );
-  //   expect(BigInt(postBalance.amount)).toBeGreaterThan(
-  //     BigInt(preBalance.amount)
-  //   );
-  // });
+  // NOTE: Queue is empty at this point.
+
+  it("should allow Alice to cancel all her redemption entries", async () => {
+    // Add multiple entries for Alice
+    for (let i = 0; i < 2; i++) {
+      console.log("Alice redeeming 10_000 coins...");
+      await aliceClient.execute(
+        aliceAddress,
+        redeemProxyAddress,
+        { redeem: { vault: vaultAddress } },
+        gasFee,
+        "",
+        [coin(10_000, syntheticAssetDenom)]
+      );
+    }
+
+    // Verify Alice has an entry
+    const aliceEntriesBefore: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+      });
+
+    console.log("Alice Entries Before:", aliceEntriesBefore);
+
+    expect(aliceEntriesBefore.entries.length).toBeGreaterThanOrEqual(1);
+
+    const preBalance = await aliceClient.getBalance(
+      aliceAddress,
+      syntheticAssetDenom
+    );
+
+    // Cancel all entries
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { cancel_all: { vault: vaultAddress } },
+      gasFee
+    );
+
+    // Check that all entries are gone
+    const aliceEntriesAfter: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+      });
+
+    expect(aliceEntriesAfter.entries.length).toBe(0);
+
+    const postBalance = await aliceClient.getBalance(
+      aliceAddress,
+      syntheticAssetDenom
+    );
+    expect(BigInt(postBalance.amount)).toBeGreaterThan(
+      BigInt(preBalance.amount)
+    );
+  });
 
   // it("should allow admin to force cancel an entry", async () => {
   //   // Add an entry for Bob again
