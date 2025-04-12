@@ -67,22 +67,12 @@ pub fn handle_process_head(deps: DepsMut, vault: String) -> Result<Response, Err
     let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
     let synthetic = synthetic_for_vault(deps.as_ref(), &hub, &vault)?;
 
-    // NOTE: Using 1 instead of 0 to accommodate precision errors
-    if reserve_balance <= 1 {
-        return Ok(Response::default());
-    }
-
     let mut queue = RedemptionQueue::new(deps.storage, &vault);
     let available_amount = Uint128::new(reserve_balance);
 
     let (processed, used_amount) = queue.process_head(available_amount)?;
 
-    // TODO: Should we return an empty Response, or the "process_head" response with
-    // "processed_entries" and "used_amount" set to "0"?
-    if processed.is_empty() {
-        return Ok(Response::default());
-    }
-
+    // NOTE: If no entries are processed, these response attributes will still exist.
     let mut response = Response::default()
         .add_attribute("kind", "process_head")
         .add_attribute("vault", &vault)
@@ -124,6 +114,7 @@ pub fn handle_redeem(
         );
     }
 
+    // FIXME: the reserve balance will have changed after the processing the head
     let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
     let available_amount = Uint128::new(reserve_balance);
 
@@ -150,16 +141,16 @@ pub fn handle_redeem(
         response = response.add_submessage(msg);
     }
 
-    // NOTE: Using 1 instead of 0 due to precision errors
+    // rustc: cannot borrow `deps` as immutable because it is also borrowed as mutable
+    // let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
+    // let available_amount = Uint128::new(reserve_balance);
+
+    // FIXME: this available amount is no longer current
+    // NOTE: Using 1 instead of 0 to accommodate precision errors
     if available_amount > Uint128::one() {
         let (processed, used_amount) = queue.process_head(available_amount)?;
 
         if !processed.is_empty() {
-            response = response
-                // TODO: are these attributes wanted?
-                .add_attribute("immediate_processed", processed.len().to_string())
-                .add_attribute("immediate_amount", used_amount);
-
             for (address, amount) in processed {
                 let msg = redeem_on_behalf(&hub, &vault, &synthetic, address, amount.u128());
                 response = response.add_message(msg);
