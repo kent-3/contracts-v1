@@ -16,7 +16,6 @@ import {
 } from "../ts/AmuletHub.types";
 import {
   InstantiateMsg,
-  ExecuteMsg,
   QueueEntriesResponse,
   QueueEntryResponse,
 } from "../ts/RedeemQueueProxy.types";
@@ -32,12 +31,7 @@ import {
 } from "./test-helpers";
 import { GENESIS_ALLOCATION } from "./suite/constants";
 
-function sharesValue(vaultState: VaultStateResponse, shares: any): bigint {
-  return (
-    (BigInt(shares) * BigInt(vaultState.total_deposits)) /
-    BigInt(vaultState.total_issued_shares)
-  );
-}
+// NOTE: Queue tests begin around line 524
 
 let suite: ITestSuite;
 let hostQueryClient: QueryClient;
@@ -60,8 +54,6 @@ let redeemProxyAddress: string;
 let gasFee: StdFee;
 let depositAssetDenom: string = "untrn";
 let syntheticAssetDenom: string;
-
-// NOTE: Queue tests begin around line 532
 
 describe("Redeem Queue Proxy", () => {
   beforeAll(async () => {
@@ -349,12 +341,12 @@ describe("Redeem Queue Proxy", () => {
 
     const aliceSynthBalance = await hostQueryClient.bank.balance(
       aliceAddress,
-      `factory/${mintAddress}/amntrn`
+      syntheticAssetDenom
     );
 
     const operatorSynthBalance = await hostQueryClient.bank.balance(
       operatorAddress,
-      `factory/${mintAddress}/amntrn`
+      syntheticAssetDenom
     );
 
     expect(+position.debt).toBe(advanceAmount);
@@ -403,7 +395,7 @@ describe("Redeem Queue Proxy", () => {
 
     const bobSynthBalance = await hostQueryClient.bank.balance(
       bobAddress,
-      `factory/${mintAddress}/amntrn`
+      syntheticAssetDenom
     );
 
     expect(+position.debt).toBe(advanceAmount);
@@ -1163,3 +1155,10 @@ describe("Redeem Queue Proxy", () => {
     );
   });
 });
+
+function sharesValue(vaultState: VaultStateResponse, shares: any): bigint {
+  return (
+    (BigInt(shares) * BigInt(vaultState.total_deposits)) /
+    BigInt(vaultState.total_issued_shares)
+  );
+}
