@@ -130,16 +130,6 @@ pub trait StorageExt: Storage {
         self.set_u64(key::ENTRY_COUNT.with(vault), count)
     }
 
-    // New removal methods
-    fn remove_queue_head(&mut self, vault: &str) {
-        self.remove(key::QUEUE_HEAD_INDEX.with(vault).as_bytes());
-    }
-
-    fn remove_queue_tail(&mut self, vault: &str) {
-        self.remove(key::QUEUE_TAIL_INDEX.with(vault).as_bytes());
-        println!("removed queue tail");
-    }
-
     fn remove_queue_index_next(&mut self, vault: &str, index: u64) {
         self.remove(key::QUEUE_INDEX_NEXT.multi([&vault, &index]).as_bytes());
     }
@@ -171,10 +161,6 @@ pub trait StorageExt: Storage {
     fn remove_index_amount(&mut self, vault: &str, index: u64) {
         self.remove(key::INDEX_AMOUNT.multi([&vault, &index]).as_bytes());
     }
-
-    // fn remove_entry_count(&mut self, vault: &str) {
-    //     self.remove(key::ENTRY_COUNT.with(vault).as_bytes());
-    // }
 }
 
 impl<T> StorageExt for T where T: Storage + ?Sized {}

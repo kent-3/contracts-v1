@@ -563,8 +563,6 @@ mod tests {
         let mut storage = MockStorage::new();
         let queue = RedemptionQueue::new(&mut storage, "test_vault");
 
-        println!("Running test_example!");
-
         assert_eq!(queue.entry_count(), 0);
     }
 
