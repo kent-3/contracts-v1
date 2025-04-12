@@ -114,18 +114,7 @@ pub fn handle_redeem(
         );
     }
 
-    // FIXME: the reserve balance will have changed after the processing the head
-    let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
-    let available_amount = Uint128::new(reserve_balance);
-
-    let entry_count = deps.storage.entry_count(&vault).unwrap_or(0);
-
-    // If the queue is not empty, the existing queue is processed first before adding the new entry.
-    let process_head_response = if entry_count > 0 {
-        handle_process_head(deps.branch(), vault.clone())?
-    } else {
-        Response::default()
-    };
+    let process_head_response = handle_process_head(deps.branch(), vault.clone())?;
 
     let mut queue = RedemptionQueue::new(deps.storage, &vault);
     let index = queue.enqueue(info.sender.as_ref(), coin.amount)?;
@@ -141,14 +130,18 @@ pub fn handle_redeem(
         response = response.add_submessage(msg);
     }
 
-    // rustc: cannot borrow `deps` as immutable because it is also borrowed as mutable
-    // let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
-    // let available_amount = Uint128::new(reserve_balance);
+    let vault_metadata: VaultMetadata = deps.querier.query_wasm_smart(
+        &hub,
+        &HubQueryMsg::VaultMetadata {
+            vault: vault.to_owned(),
+        },
+    )?;
+    let reserve_balance = vault_metadata.reserve_balance.u128();
+    let available_amount = Uint128::new(reserve_balance);
 
-    // FIXME: this available amount is no longer current
     // NOTE: Using 1 instead of 0 to accommodate precision errors
     if available_amount > Uint128::one() {
-        let (processed, used_amount) = queue.process_head(available_amount)?;
+        let (processed, _used_amount) = queue.process_head(available_amount)?;
 
         if !processed.is_empty() {
             for (address, amount) in processed {

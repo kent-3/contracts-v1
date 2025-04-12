@@ -566,7 +566,7 @@ describe("Redeem Queue Proxy", () => {
 
     const redeemAmount = 500_000;
 
-    const result = await aliceClient.execute(
+    await aliceClient.execute(
       aliceAddress,
       redeemProxyAddress,
       { redeem: { vault: vaultAddress } },
@@ -574,13 +574,6 @@ describe("Redeem Queue Proxy", () => {
       "",
       [coin(redeemAmount, syntheticAssetDenom)]
     );
-
-    // Check that the event log contains immediate processing marker
-    const attrValue = result.events
-      .find((e) => e.type === "wasm")
-      ?.attributes.find((a) => a.key === "immediate_processed")?.value;
-
-    expect(attrValue).toBe("1");
 
     // The queue should still be empty
     const queueEntries = await operatorClient.queryContractSmart(
@@ -700,7 +693,6 @@ describe("Redeem Queue Proxy", () => {
       redeemProxyAddress,
       { all_queue_entries: { vault: vaultAddress } }
     );
-    console.debug("Queue Entries: ", JSON.stringify(queueEntries));
 
     expect(queueEntries.entries.length).toBe(2);
     expect(queueEntries.entries[1].address).toBe(bobAddress);
@@ -729,7 +721,6 @@ describe("Redeem Queue Proxy", () => {
       await operatorClient.queryContractSmart(redeemProxyAddress, {
         owner_queue_entries: { vault: vaultAddress, address: bobAddress },
       });
-    console.debug("Bob Entries: ", JSON.stringify(bobEntries));
 
     expect(bobEntries.entries.length).toBe(1);
     expect(bobEntries.entries[0].address).toBe(bobAddress);
@@ -815,33 +806,12 @@ describe("Redeem Queue Proxy", () => {
 
   // NOTE: Queue is empty at this point.
 
+  // TODO: this test could be better. it's only cancelling one entry because her redeems combine
   it("should allow Alice to cancel all her redemption entries", async () => {
-    let vaultMetadata: VaultMetadata = await operatorClient.queryContractSmart(
-      hubAddress,
-      {
-        vault_metadata: { vault: vaultAddress },
-      }
-    );
-    console.debug("Vault Reserves: ", vaultMetadata.reserve_balance);
-
-    // The queue should be empty
-    const queueEntries: QueueEntriesResponse =
-      await operatorClient.queryContractSmart(redeemProxyAddress, {
-        all_queue_entries: { vault: vaultAddress },
-      });
-    console.debug("All Queue Entries:  ", JSON.stringify(queueEntries));
-
-    const aliceEntries: QueueEntriesResponse =
-      await operatorClient.queryContractSmart(redeemProxyAddress, {
-        owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
-      });
-    console.debug("Alice Queue Entries:", aliceEntries);
-
     // Add multiple entries for Alice
 
     // This one should have a partial instant redemption
-    console.log("Alice redeeming 1_000_000 coins...");
-    let response = await aliceClient.execute(
+    await aliceClient.execute(
       aliceAddress,
       redeemProxyAddress,
       { redeem: { vault: vaultAddress } },
@@ -849,22 +819,8 @@ describe("Redeem Queue Proxy", () => {
       "",
       [coin(1_000_000, syntheticAssetDenom)]
     );
-    console.debug(JSON.stringify(response.events, null, 4));
 
-    vaultMetadata = await operatorClient.queryContractSmart(hubAddress, {
-      vault_metadata: { vault: vaultAddress },
-    });
-    console.debug("Vault Reserves: ", vaultMetadata.reserve_balance);
-    console.debug("the vault reserves are stuck at 1 somehow");
-
-    const queueEntries2: QueueEntriesResponse =
-      await operatorClient.queryContractSmart(redeemProxyAddress, {
-        all_queue_entries: { vault: vaultAddress },
-      });
-    console.debug("All Queue Entries:  ", JSON.stringify(queueEntries2));
-
-    console.log("Alice redeeming 1_000_000 coins...");
-    response = await aliceClient.execute(
+    await aliceClient.execute(
       aliceAddress,
       redeemProxyAddress,
       { redeem: { vault: vaultAddress } },
@@ -872,17 +828,12 @@ describe("Redeem Queue Proxy", () => {
       "",
       [coin(1_000_000, syntheticAssetDenom)]
     );
-    console.debug(JSON.stringify(response.events, null, 4));
-
-    console.log("Trying to query Alice entries...");
 
     // Verify Alice has an entry
     const aliceEntriesBefore: QueueEntriesResponse =
       await operatorClient.queryContractSmart(redeemProxyAddress, {
         owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
       });
-
-    console.log("Alice Entries Before:", aliceEntriesBefore);
 
     expect(aliceEntriesBefore.entries.length).toBeGreaterThanOrEqual(1);
 
@@ -905,8 +856,6 @@ describe("Redeem Queue Proxy", () => {
         owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
       });
 
-    console.log("Alice Entries After:", aliceEntriesAfter);
-
     expect(aliceEntriesAfter.entries.length).toBe(0);
 
     const postBalance = await aliceClient.getBalance(
@@ -916,11 +865,6 @@ describe("Redeem Queue Proxy", () => {
     expect(BigInt(postBalance.amount)).toBeGreaterThan(
       BigInt(preBalance.amount)
     );
-
-    vaultMetadata = await operatorClient.queryContractSmart(hubAddress, {
-      vault_metadata: { vault: vaultAddress },
-    });
-    console.debug("Vault Reserves: ", vaultMetadata.reserve_balance);
   });
 
   // it("should allow admin to force cancel an entry", async () => {

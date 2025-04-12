@@ -248,7 +248,7 @@ impl<'a> RedemptionQueue<'a> {
     /// Removes an entry from the queue by its index and returns the address and amount.
     ///
     /// This function updates the queue links (both main queue and user-specific links)
-    /// to disconnect the entry from the queue and properly removes the entry's links from storage.
+    /// to disconnect the entry from the queue and removes the entry's links from storage.
     ///
     /// After removal, a query for this entry will return None for both address and amount.
     pub fn remove_entry(&mut self, index: u64) -> Result<(String, Uint128)> {
