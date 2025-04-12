@@ -67,7 +67,8 @@ pub fn handle_process_head(deps: DepsMut, vault: String) -> Result<Response, Err
     let reserve_balance = vault_reserve_balance(deps.as_ref(), &hub, &vault)?;
     let synthetic = synthetic_for_vault(deps.as_ref(), &hub, &vault)?;
 
-    if reserve_balance == 0 {
+    // NOTE: Using 1 instead of 0 to accommodate precision errors
+    if reserve_balance <= 1 {
         return Ok(Response::default());
     }
 
@@ -136,7 +137,7 @@ pub fn handle_redeem(
     };
 
     let mut queue = RedemptionQueue::new(deps.storage, &vault);
-    let index = queue.enqueue(&info.sender.to_string(), coin.amount)?;
+    let index = queue.enqueue(info.sender.as_ref(), coin.amount)?;
 
     let mut response = Response::default()
         .add_attribute("kind", "redeem")
@@ -149,7 +150,8 @@ pub fn handle_redeem(
         response = response.add_submessage(msg);
     }
 
-    if !available_amount.is_zero() {
+    // NOTE: Using 1 instead of 0 due to precision errors
+    if available_amount > Uint128::one() {
         let (processed, used_amount) = queue.process_head(available_amount)?;
 
         if !processed.is_empty() {
@@ -179,7 +181,7 @@ pub fn handle_cancel_entry(
     let mut queue = RedemptionQueue::new(deps.storage, &vault);
 
     match queue.get_entry(index) {
-        Some(entry) if entry.address == info.sender.to_string() => {
+        Some(entry) if entry.address == info.sender => {
             let (_, amount) = queue.remove_entry(index)?;
 
             let hub = deps.storage.hub();
@@ -215,7 +217,7 @@ pub fn handle_cancel_all(
     deps.api.addr_validate(&vault)?;
 
     let mut queue = RedemptionQueue::new(deps.storage, &vault);
-    let cancelled = queue.cancel_user_entries(&info.sender.to_string())?;
+    let cancelled = queue.cancel_user_entries(info.sender.as_ref())?;
 
     if cancelled.is_empty() {
         return Ok(Response::default()

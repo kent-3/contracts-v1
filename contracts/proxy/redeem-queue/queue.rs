@@ -147,14 +147,10 @@ impl<'a> RedemptionQueue<'a> {
         // Get the current tail
         let tail_index = self.storage.queue_tail(self.vault);
 
-        println!("tail_index: {:?}", tail_index);
-
         // Check if the tail entry belongs to this user
         if let Some(tail_idx) = tail_index {
             // Get the current queue entry count
             let count = self.entry_count();
-
-            println!("count: {:?}", count);
 
             // If count is 0, we know the queue is empty despite having a tail_idx
             // This means all entries have been processed
@@ -178,19 +174,16 @@ impl<'a> RedemptionQueue<'a> {
         // If we got here, create a new entry
 
         // Get the next available index
-        let index = match self.storage.queue_tail(self.vault) {
+        let index = match tail_index {
             Some(tail) => {
                 // If tail exists, find next available index or increment
-                let tail_next = match self.storage.queue_index_next(self.vault, tail) {
-                    Some(next) => next,
+                match self.storage.queue_index_next(self.vault, tail) {
+                    Some(tail_next) => tail_next,
                     None => tail + 1,
-                };
-                tail_next
+                }
             }
             None => 0, // First entry
         };
-
-        println!("index: {:?}", index);
 
         // Store entry data
         self.storage.set_index_address(self.vault, index, address);
@@ -281,9 +274,9 @@ impl<'a> RedemptionQueue<'a> {
 
         match (prev, next) {
             (None, None) => {
-                // Single element in queue
-                // self.storage.remove_queue_head(self.vault);
-                // self.storage.remove_queue_tail(self.vault);
+                // Single element in queue - keep the head/tail pointing to the last processed index.
+                // This lets us know what the last index was for determining the next one
+                // Even though the entry is removed, the pointers remain
             }
             (None, Some(next_idx)) => {
                 // Head of queue
@@ -368,11 +361,8 @@ impl<'a> RedemptionQueue<'a> {
         let mut processed = Vec::new();
 
         // Process entries until we run out of funds or queue is empty
-        while remaining > Uint128::zero() {
-            if self.entry_count() == 0 {
-                break; // Empty queue
-            }
-
+        // NOTE: Using 1 instead of 0 to accommodate precision errors
+        while remaining > Uint128::one() {
             match self.storage.queue_head(self.vault) {
                 Some(head) => {
                     match self.get_entry(head) {
@@ -563,9 +553,9 @@ impl<'a> ReadOnlyRedemptionQueue<'a> {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use cosmwasm_std::{testing::MockStorage, Storage, Uint128};
+    use cosmwasm_std::{testing::MockStorage, Uint128};
 
-    use crate::queue::{Entry, ReadOnlyRedemptionQueue, RedemptionQueue};
+    use crate::queue::{ReadOnlyRedemptionQueue, RedemptionQueue};
     use crate::state::StorageExt as _;
 
     #[test]
@@ -1071,7 +1061,7 @@ mod tests {
 
         // Now process this entry too
         let available_amount = Uint128::new(200);
-        let (processed, used_amount) = queue.process_head(available_amount)?;
+        let (processed, _used_amount) = queue.process_head(available_amount)?;
 
         // Verify it was processed
         assert_eq!(processed.len(), 1);
