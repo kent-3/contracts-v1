@@ -15,14 +15,8 @@ import {
   VaultMetadata,
 } from "../ts/AmuletHub.types";
 import {
-  InstantiateMsg as DepositProxyInstantiateMsg,
-  MetadataResponse,
-  DepositAmountResponse,
-  ExecuteMsg as DepositProxyExecuteMsg,
-} from "../ts/DepositCapProxy.types";
-import {
-  InstantiateMsg as RedeemProxyInstantiateMsg,
-  ExecuteMsg as RedeemProxyExecuteMsg,
+  InstantiateMsg,
+  ExecuteMsg,
   QueueEntriesResponse,
   QueueEntryResponse,
 } from "../ts/RedeemQueueProxy.types";
@@ -66,6 +60,8 @@ let redeemProxyAddress: string;
 let gasFee: StdFee;
 let depositAssetDenom: string = "untrn";
 let syntheticAssetDenom: string;
+
+// NOTE: Queue tests begin around line 532
 
 describe("Redeem Queue Proxy", () => {
   beforeAll(async () => {
@@ -189,7 +185,7 @@ describe("Redeem Queue Proxy", () => {
   });
 
   it("should deploy the redeem-queue-proxy", async () => {
-    const msg: RedeemProxyInstantiateMsg = {
+    const msg: InstantiateMsg = {
       hub_address: hubAddress,
     };
 
@@ -713,7 +709,7 @@ describe("Redeem Queue Proxy", () => {
       });
 
     expect(bobEntry.position_in_queue).toBe(1); // Position is zero-indexed
-    expect(Number(bobEntry.amount_in_front)).toBeGreaterThan(0); // TODO: expect an actual amount
+    expect(Number(bobEntry.amount_in_front)).toBe(1000000);
   });
 
   it("should allow Bob to view all his queue entries", async () => {
@@ -806,43 +802,113 @@ describe("Redeem Queue Proxy", () => {
 
   // NOTE: Queue is empty at this point.
 
-  // TODO: this test could be better. it's only cancelling one entry because her redeems combine
   it("should allow Alice to cancel all her redemption entries", async () => {
-    // Add multiple entries for Alice
+    // Make sure the queue is empty to start with
+    const initialQueueEntries = await operatorClient.queryContractSmart(
+      redeemProxyAddress,
+      { all_queue_entries: { vault: vaultAddress } }
+    );
 
-    // This one should have a partial instant redemption
+    if (initialQueueEntries.entries.length > 0) {
+      // Process any existing queue entries first
+      await operatorClient.execute(
+        operatorAddress,
+        redeemProxyAddress,
+        { process_head: { vault: vaultAddress } },
+        gasFee
+      );
+    }
+
+    // Create a pattern of alternating redemptions between Alice and Bob
+    // This ensures Alice's entries don't combine into a single one
+
+    // Alice's first redemption
     await aliceClient.execute(
       aliceAddress,
       redeemProxyAddress,
       { redeem: { vault: vaultAddress } },
       gasFee,
       "",
-      [coin(1_000_000, syntheticAssetDenom)]
+      [coin(500000, syntheticAssetDenom)]
     );
 
+    // Bob's first redemption
+    await bobClient.execute(
+      bobAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(400000, syntheticAssetDenom)]
+    );
+
+    // Alice's second redemption
     await aliceClient.execute(
       aliceAddress,
       redeemProxyAddress,
       { redeem: { vault: vaultAddress } },
       gasFee,
       "",
-      [coin(1_000_000, syntheticAssetDenom)]
+      [coin(300000, syntheticAssetDenom)]
     );
 
-    // Verify Alice has an entry
+    // Bob's second redemption
+    await bobClient.execute(
+      bobAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(200000, syntheticAssetDenom)]
+    );
+
+    // Alice's third redemption
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(100000, syntheticAssetDenom)]
+    );
+
+    // Verify Alice has exactly three entries
     const aliceEntriesBefore: QueueEntriesResponse =
       await operatorClient.queryContractSmart(redeemProxyAddress, {
         owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
       });
 
-    expect(aliceEntriesBefore.entries.length).toBeGreaterThanOrEqual(1);
+    expect(aliceEntriesBefore.entries.length).toBe(3);
 
+    // Verify Bob has exactly two entries
+    const bobEntriesBefore: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: bobAddress },
+      });
+
+    expect(bobEntriesBefore.entries.length).toBe(2);
+
+    // Verify total entries in queue
+    const allEntriesBefore: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        all_queue_entries: { vault: vaultAddress },
+      });
+
+    expect(allEntriesBefore.entries.length).toBe(5);
+
+    // Calculate total amount in Alice's entries for later verification
+    const totalAliceAmount = aliceEntriesBefore.entries.reduce(
+      (sum, entry) => sum + BigInt(entry.amount),
+      0n
+    );
+
+    // Get Alice's balance before cancellation
     const preBalance = await aliceClient.getBalance(
       aliceAddress,
       syntheticAssetDenom
     );
 
-    // Cancel all entries
+    // Cancel all entries for Alice
     await aliceClient.execute(
       aliceAddress,
       redeemProxyAddress,
@@ -850,7 +916,7 @@ describe("Redeem Queue Proxy", () => {
       gasFee
     );
 
-    // Check that all entries are gone
+    // Check that Alice's entries are gone
     const aliceEntriesAfter: QueueEntriesResponse =
       await operatorClient.queryContractSmart(redeemProxyAddress, {
         owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
@@ -858,179 +924,242 @@ describe("Redeem Queue Proxy", () => {
 
     expect(aliceEntriesAfter.entries.length).toBe(0);
 
+    // Verify Bob's entries are still there
+    const bobEntriesAfter: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: bobAddress },
+      });
+
+    expect(bobEntriesAfter.entries.length).toBe(2);
+
+    // Verify total entries in queue decreased by exactly the number of Alice's entries
+    const allEntriesAfter: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        all_queue_entries: { vault: vaultAddress },
+      });
+
+    expect(allEntriesAfter.entries.length).toBe(2);
+
+    // Check that Alice's balance increased by the total amount that was in her entries
     const postBalance = await aliceClient.getBalance(
       aliceAddress,
       syntheticAssetDenom
     );
-    expect(BigInt(postBalance.amount)).toBeGreaterThan(
-      BigInt(preBalance.amount)
+
+    const balanceIncrease =
+      BigInt(postBalance.amount) - BigInt(preBalance.amount);
+    expect(balanceIncrease).toBe(totalAliceAmount);
+
+    // Clean up by cancelling Bob's entries
+    await bobClient.execute(
+      bobAddress,
+      redeemProxyAddress,
+      { cancel_all: { vault: vaultAddress } },
+      gasFee
     );
   });
 
-  // it("should allow admin to force cancel an entry", async () => {
-  //   // Add an entry for Bob again
-  //   await bobClient.execute(
-  //     bobAddress,
-  //     redeemProxyAddress,
-  //     { redeem: { vault: vaultAddress } },
-  //     gasFee,
-  //     "",
-  //     [coin(50000, syntheticAssetDenom)]
-  //   );
-  //
-  //   // Get Bob's entry index
-  //   const bobEntries: QueueEntriesResponse =
-  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
-  //       owner_queue_entries: { vault: vaultAddress, address: bobAddress },
-  //     });
-  //
-  //   const bobEntryIndex = bobEntries.entries[0].index;
-  //   const preBalance = await bobClient.getBalance(
-  //     bobAddress,
-  //     syntheticAssetDenom
-  //   );
-  //
-  //   // Admin force cancels the entry
-  //   await operatorClient.execute(
-  //     operatorAddress,
-  //     redeemProxyAddress,
-  //     { force_cancel_entry: { vault: vaultAddress, index: bobEntryIndex } },
-  //     gasFee
-  //   );
-  //
-  //   // Verify entry is gone
-  //   const queueEntries: QueueEntriesResponse =
-  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
-  //       all_queue_entries: { vault: vaultAddress },
-  //     });
-  //
-  //   expect(
-  //     queueEntries.entries.find((e) => e.index === bobEntryIndex)
-  //   ).toBeUndefined();
-  //
-  //   const postBalance = await bobClient.getBalance(
-  //     bobAddress,
-  //     syntheticAssetDenom
-  //   );
-  //   expect(BigInt(postBalance.amount)).toBeGreaterThan(
-  //     BigInt(preBalance.amount)
-  //   );
-  // });
+  // First, let's add the "should allow admin to force cancel an entry" test
+  it("should allow admin to force cancel an entry", async () => {
+    // Add an entry for Bob
+    await bobClient.execute(
+      bobAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(50000, syntheticAssetDenom)]
+    );
 
-  // it("should not allow non-admin to force cancel entries", async () => {
-  //   // Get Bob's entry
-  //   const bobEntries: QueueEntriesResponse =
-  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
-  //       owner_queue_entries: { vault: vaultAddress, address: bobAddress },
-  //     });
-  //
-  //   console.log("Bob Entries: ", JSON.stringify(bobEntries));
-  //
-  //   const bobEntryIndex = bobEntries.entries.at(-1)!.index;
-  //
-  //   // Bob tries to force cancel (should fail)
-  //   expect(async () => {
-  //     await bobClient.execute(
-  //       bobAddress,
-  //       redeemProxyAddress,
-  //       { force_cancel_entry: { vault: vaultAddress, index: bobEntryIndex } },
-  //       gasFee
-  //     );
-  //   }).toThrow("unauthorized");
-  // });
+    // Get Bob's entry index
+    const bobEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: bobAddress },
+      });
 
-  // it("should not allow users to cancel other user's entries", async () => {
-  //   // Add an entry for Alice
-  //   await aliceClient.execute(
-  //     aliceAddress,
-  //     redeemProxyAddress,
-  //     { redeem: { vault: vaultAddress } },
-  //     gasFee,
-  //     "",
-  //     [coin(10000, syntheticAssetDenom)]
-  //   );
-  //
-  //   // Get Alice's entry
-  //   const aliceEntries: QueueEntriesResponse =
-  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
-  //       owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
-  //     });
-  //
-  //   console.log("Alice Entries: ", JSON.stringify(aliceEntries));
-  //
-  //   const aliceEntryIndex = aliceEntries.entries.at(-1)!.index;
-  //
-  //   // Bob tries to cancel Alice's entry (should fail)
-  //   expect(async () => {
-  //     await bobClient.execute(
-  //       bobAddress,
-  //       redeemProxyAddress,
-  //       { cancel_entry: { vault: vaultAddress, index: aliceEntryIndex } },
-  //       gasFee
-  //     );
-  //   }).toThrow("does not belong to");
-  // });
+    expect(bobEntries.entries.length).toBe(1);
+    const bobEntryIndex = bobEntries.entries[0].index;
+    const bobEntryAmount = bobEntries.entries[0].amount;
 
-  // it("should handle cancelling non-existent entries", async () => {
-  //   const nonExistentIndex = 999999;
-  //
-  //   // Try to cancel a non-existent entry
-  //   expect(async () => {
-  //     await bobClient.execute(
-  //       bobAddress,
-  //       redeemProxyAddress,
-  //       { cancel_entry: { vault: vaultAddress, index: nonExistentIndex } },
-  //       gasFee
-  //     );
-  //   }).toThrow("not found");
-  // });
-  //
-  // it("should handle redeeming when reserves are completely empty", async () => {
-  //   // First, ensure reserves are empty by processing any queued redemptions
-  //   const vaultMetadata: VaultMetadata =
-  //     await operatorClient.queryContractSmart(hubAddress, {
-  //       vault_metadata: { vault: vaultAddress },
-  //     });
-  //
-  //   if (Number(vaultMetadata.reserve_balance) > 0) {
-  //     // Redeem all available reserves
-  //     await bobClient.execute(
-  //       bobAddress,
-  //       redeemProxyAddress,
-  //       { redeem: { vault: vaultAddress } },
-  //       gasFee,
-  //       "",
-  //       [coin(vaultMetadata.reserve_balance, syntheticAssetDenom)]
-  //     );
-  //
-  //     // Process any queue
-  //     await operatorClient.execute(
-  //       operatorAddress,
-  //       redeemProxyAddress,
-  //       { process_head: { vault: vaultAddress } },
-  //       gasFee
-  //     );
-  //   }
-  //
-  //   // Now try to redeem with empty reserves
-  //   await bobClient.execute(
-  //     bobAddress,
-  //     redeemProxyAddress,
-  //     { redeem: { vault: vaultAddress } },
-  //     gasFee,
-  //     "",
-  //     [coin(5000, syntheticAssetDenom)]
-  //   );
-  //
-  //   // Should have an entry in the queue now
-  //   const queueEntries: QueueEntriesResponse =
-  //     await operatorClient.queryContractSmart(redeemProxyAddress, {
-  //       all_queue_entries: { vault: vaultAddress },
-  //     });
-  //
-  //   expect(queueEntries.entries.length).toBeGreaterThan(0);
-  //   expect(queueEntries.entries.some((e) => e.address === bobAddress)).toBe(
-  //     true
-  //   );
-  // });
+    const preBalance = await bobClient.getBalance(
+      bobAddress,
+      syntheticAssetDenom
+    );
+
+    // Admin force cancels the entry
+    await operatorClient.execute(
+      operatorAddress,
+      redeemProxyAddress,
+      {
+        force_cancel_entry: { vault: vaultAddress, index: bobEntryIndex },
+      },
+      gasFee
+    );
+
+    // Verify entry is gone
+    const queueEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        all_queue_entries: { vault: vaultAddress },
+      });
+
+    expect(
+      queueEntries.entries.find((e) => e.index === bobEntryIndex)
+    ).toBeUndefined();
+
+    // Verify Bob received his tokens back
+    const postBalance = await bobClient.getBalance(
+      bobAddress,
+      syntheticAssetDenom
+    );
+    expect(BigInt(postBalance.amount) - BigInt(preBalance.amount)).toBe(
+      BigInt(bobEntryAmount)
+    );
+  });
+
+  it("should not allow non-admin to force cancel entries", async () => {
+    // Add an entry for Bob
+    await bobClient.execute(
+      bobAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(50000, syntheticAssetDenom)]
+    );
+
+    // Get Bob's entry index
+    const bobEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: bobAddress },
+      });
+
+    expect(bobEntries.entries.length).toBe(1);
+    const bobEntryIndex = bobEntries.entries[0].index;
+
+    // Attempt to execute force_cancel_entry as non-admin (Bob)
+    // We expect this to fail with an 'unauthorized' error
+    expect(async () => {
+      await bobClient.execute(
+        bobAddress,
+        redeemProxyAddress,
+        {
+          force_cancel_entry: { vault: vaultAddress, index: bobEntryIndex },
+        },
+        gasFee
+      );
+    }).toThrow("unauthorized");
+
+    // Clean up the test - cancel the entry as admin
+    await operatorClient.execute(
+      operatorAddress,
+      redeemProxyAddress,
+      {
+        force_cancel_entry: { vault: vaultAddress, index: bobEntryIndex },
+      },
+      gasFee
+    );
+  });
+
+  it("should not allow users to cancel other user's entries", async () => {
+    // Add an entry for Alice
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(10000, syntheticAssetDenom)]
+    );
+
+    // Get Alice's entry index
+    const aliceEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+      });
+
+    expect(aliceEntries.entries.length).toBe(1);
+    const aliceEntryIndex = aliceEntries.entries[0].index;
+
+    // Bob tries to cancel Alice's entry (should fail)
+    expect(async () => {
+      await bobClient.execute(
+        bobAddress,
+        redeemProxyAddress,
+        { cancel_entry: { vault: vaultAddress, index: aliceEntryIndex } },
+        gasFee
+      );
+    }).toThrow("does not belong to");
+
+    // Clean up - Alice cancels her own entry
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { cancel_entry: { vault: vaultAddress, index: aliceEntryIndex } },
+      gasFee
+    );
+  });
+
+  it("should handle cancelling non-existent entries", async () => {
+    const nonExistentIndex = 999999;
+
+    // Try to cancel a non-existent entry
+    expect(async () => {
+      await bobClient.execute(
+        bobAddress,
+        redeemProxyAddress,
+        { cancel_entry: { vault: vaultAddress, index: nonExistentIndex } },
+        gasFee
+      );
+    }).toThrow("not found");
+  });
+
+  it("should handle redeeming when reserves are completely empty", async () => {
+    // First, ensure reserves are empty by adding and processing a redemption
+    // that exceeds the available reserves
+    const vaultMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
+        vault_metadata: { vault: vaultAddress },
+      });
+
+    if (Number(vaultMetadata.reserve_balance) > 0) {
+      // Redeem all available reserves
+      await bobClient.execute(
+        bobAddress,
+        redeemProxyAddress,
+        { redeem: { vault: vaultAddress } },
+        gasFee,
+        "",
+        [coin(vaultMetadata.reserve_balance, syntheticAssetDenom)]
+      );
+
+      // Process any queue
+      await operatorClient.execute(
+        operatorAddress,
+        redeemProxyAddress,
+        { process_head: { vault: vaultAddress } },
+        gasFee
+      );
+    }
+
+    // Now try to redeem with empty reserves
+    await bobClient.execute(
+      bobAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(5000, syntheticAssetDenom)]
+    );
+
+    // Should have an entry in the queue now
+    const queueEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        all_queue_entries: { vault: vaultAddress },
+      });
+
+    expect(queueEntries.entries.length).toBeGreaterThan(0);
+    expect(queueEntries.entries.some((e) => e.address === bobAddress)).toBe(
+      true
+    );
+  });
 });
