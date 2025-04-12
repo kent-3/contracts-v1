@@ -1,25 +1,25 @@
 [package]
-name = "redeem-queue-proxy"
-version = "1.0.0"
-edition = "2021"
+name       = "redeem-queue-proxy"
+version    = "1.0.0"
+edition    = "2021"
 
 [[bin]]
-name = "schema"
-path = "schema.rs"
-doctest = false
-test = false
+name       = "schema"
+path       = "schema.rs"
+doctest    = false
+test       = false
 
 [lib]
-path = "contract.rs"
+path       = "contract.rs"
 crate-type = ["cdylib", "rlib"]
-doctest = false
-test = true
+doctest    = false
+test       = true
 
 [dependencies]
-anyhow.workspace = true
-cosmwasm-std.workspace = true
+anyhow.workspace          = true
+cosmwasm-std.workspace    = true
 cosmwasm-schema.workspace = true
-cw-utils.workspace = true
+cw-utils.workspace        = true
 
-amulet-cw.workspace = true
-amulet-core.workspace = true
+amulet-cw.workspace       = true
+amulet-core.workspace     = true
