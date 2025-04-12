@@ -129,6 +129,52 @@ pub trait StorageExt: Storage {
     fn set_entry_count(&mut self, vault: &str, count: u64) {
         self.set_u64(key::ENTRY_COUNT.with(vault), count)
     }
+
+    // New removal methods
+    fn remove_queue_head(&mut self, vault: &str) {
+        self.remove(key::QUEUE_HEAD_INDEX.with(vault).as_bytes());
+    }
+
+    fn remove_queue_tail(&mut self, vault: &str) {
+        self.remove(key::QUEUE_TAIL_INDEX.with(vault).as_bytes());
+        println!("removed queue tail");
+    }
+
+    fn remove_queue_index_next(&mut self, vault: &str, index: u64) {
+        self.remove(key::QUEUE_INDEX_NEXT.multi([&vault, &index]).as_bytes());
+    }
+
+    fn remove_queue_index_prev(&mut self, vault: &str, index: u64) {
+        self.remove(key::QUEUE_INDEX_PREV.multi([&vault, &index]).as_bytes());
+    }
+
+    fn remove_user_head(&mut self, address: &str) {
+        self.remove(key::USER_HEAD_INDEX.with(address).as_bytes());
+    }
+
+    fn remove_user_tail(&mut self, address: &str) {
+        self.remove(key::USER_TAIL_INDEX.with(address).as_bytes());
+    }
+
+    fn remove_user_index_next(&mut self, address: &str, index: u64) {
+        self.remove(key::USER_INDEX_NEXT.multi([&address, &index]).as_bytes());
+    }
+
+    fn remove_user_index_prev(&mut self, address: &str, index: u64) {
+        self.remove(key::USER_INDEX_PREV.multi([&address, &index]).as_bytes());
+    }
+
+    fn remove_index_address(&mut self, vault: &str, index: u64) {
+        self.remove(key::INDEX_ADDRESS.multi([&vault, &index]).as_bytes());
+    }
+
+    fn remove_index_amount(&mut self, vault: &str, index: u64) {
+        self.remove(key::INDEX_AMOUNT.multi([&vault, &index]).as_bytes());
+    }
+
+    // fn remove_entry_count(&mut self, vault: &str) {
+    //     self.remove(key::ENTRY_COUNT.with(vault).as_bytes());
+    // }
 }
 
 impl<T> StorageExt for T where T: Storage + ?Sized {}

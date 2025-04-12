@@ -700,6 +700,7 @@ describe("Redeem Queue Proxy", () => {
       redeemProxyAddress,
       { all_queue_entries: { vault: vaultAddress } }
     );
+    console.debug("Queue Entries: ", JSON.stringify(queueEntries));
 
     expect(queueEntries.entries.length).toBe(2);
     expect(queueEntries.entries[1].address).toBe(bobAddress);
@@ -728,6 +729,7 @@ describe("Redeem Queue Proxy", () => {
       await operatorClient.queryContractSmart(redeemProxyAddress, {
         owner_queue_entries: { vault: vaultAddress, address: bobAddress },
       });
+    console.debug("Bob Entries: ", JSON.stringify(bobEntries));
 
     expect(bobEntries.entries.length).toBe(1);
     expect(bobEntries.entries[0].address).toBe(bobAddress);
