@@ -85,8 +85,14 @@ impl<'a> RedemptionQueue<'a> {
         let limit = limit.unwrap_or(u64::MAX);
         let mut entries = Vec::new();
         let mut current = start;
+        let mut visited_indices = std::collections::HashSet::new();
 
         for _ in 0..limit {
+            // If we've already visited this index, we're in a cycle
+            if !visited_indices.insert(current) {
+                break;
+            }
+
             match self.get_entry(current) {
                 Some(entry) if entry.address == address => {
                     entries.push(entry);
@@ -135,8 +141,40 @@ impl<'a> RedemptionQueue<'a> {
         }
     }
 
+    // FIXME: previously used indexes are being overwritten
+
     /// Adds a new entry to the queue for the specified address and amount
+    /// or appends to an existing entry if the user owns the tail
     pub fn enqueue(&mut self, address: &str, amount: Uint128) -> Result<u64> {
+        // Get the current tail
+        let tail_index = self.storage.queue_tail(self.vault);
+
+        // Check if the tail entry belongs to this user
+        if let Some(tail_idx) = tail_index {
+            // Get the current queue entry count
+            let count = self.entry_count();
+
+            // If count is 0, we know the queue is empty despite having a tail_idx
+            // This means all entries have been processed
+            if count > 0 {
+                if let Some(tail_address) = self.storage.index_address(self.vault, tail_idx) {
+                    if tail_address == address {
+                        // User owns the tail entry, append to it instead of creating a new one
+                        if let Some(current_amount) =
+                            self.storage.index_amount(self.vault, tail_idx)
+                        {
+                            let new_amount = Uint128::new(current_amount) + amount;
+                            self.storage
+                                .set_index_amount(self.vault, tail_idx, new_amount.u128());
+                            return Ok(tail_idx);
+                        }
+                    }
+                }
+            }
+        }
+
+        // If we got here, create a new entry
+
         // Get the next available index
         let index = match self.storage.queue_tail(self.vault) {
             Some(tail) => {
@@ -456,8 +494,14 @@ impl<'a> ReadOnlyRedemptionQueue<'a> {
         let limit = limit.unwrap_or(u64::MAX);
         let mut entries = Vec::new();
         let mut current = start;
+        let mut visited_indices = std::collections::HashSet::new();
 
         for _ in 0..limit {
+            // If we've already visited this index, we're in a cycle
+            if !visited_indices.insert(current) {
+                break;
+            }
+
             match self.get_entry(current) {
                 Some(entry) if entry.address == address => {
                     entries.push(entry);

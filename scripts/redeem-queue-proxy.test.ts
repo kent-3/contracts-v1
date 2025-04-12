@@ -564,7 +564,7 @@ describe("Redeem Queue Proxy", () => {
       syntheticAssetDenom
     );
 
-    const redeemAmount = 1_000_000;
+    const redeemAmount = 500_000;
 
     const result = await aliceClient.execute(
       aliceAddress,
@@ -684,7 +684,7 @@ describe("Redeem Queue Proxy", () => {
   });
 
   it("should create a queue entry when bob tries to redeem anything", async () => {
-    const redeemAmount = 1_000_000;
+    const redeemAmount = 2_000_000;
 
     await bobClient.execute(
       bobAddress,
@@ -708,7 +708,7 @@ describe("Redeem Queue Proxy", () => {
 
     // The amount in the queue should be the sum of Alice and Bob redeem amounts.
     expect(queuedAmount).toBeGreaterThan(0);
-    expect(queuedAmount).toBeLessThanOrEqual(2_000_000);
+    expect(queuedAmount).toBeLessThanOrEqual(3_000_000);
   });
 
   it("should correctly calculate position and amount in front for queue entries", async () => {
@@ -720,7 +720,7 @@ describe("Redeem Queue Proxy", () => {
       });
 
     expect(bobEntry.position_in_queue).toBe(1); // Position is zero-indexed
-    expect(Number(bobEntry.amount_in_front)).toBeGreaterThan(0);
+    expect(Number(bobEntry.amount_in_front)).toBeGreaterThan(0); // TODO: expect an actual amount
   });
 
   it("should allow Bob to view all his queue entries", async () => {
@@ -780,7 +780,7 @@ describe("Redeem Queue Proxy", () => {
       { mint: { vault: vaultAddress } },
       gasFee,
       "",
-      [coin(1_000_000, depositAssetDenom)]
+      [coin(2_000_000, depositAssetDenom)]
     );
 
     // Process the queue (should only have Bob's entry)
@@ -805,7 +805,7 @@ describe("Redeem Queue Proxy", () => {
         claimable: { address: bobAddress },
       });
 
-    const expectedClaimable = Math.floor(1_000_000 / 1.1);
+    const expectedClaimable = Math.floor(2_000_000 / 1.1);
 
     toBeWithinN(1, Number(bobClaimable.amount), expectedClaimable);
   });
@@ -813,18 +813,49 @@ describe("Redeem Queue Proxy", () => {
   // NOTE: Queue is empty at this point.
 
   it("should allow Alice to cancel all her redemption entries", async () => {
+    const vaultMetadata: VaultMetadata =
+      await operatorClient.queryContractSmart(hubAddress, {
+        vault_metadata: { vault: vaultAddress },
+      });
+    console.debug("Vault Metadata: ", JSON.stringify(vaultMetadata));
+
+    // The queue should be empty
+    const queueEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        all_queue_entries: { vault: vaultAddress },
+      });
+    console.debug("All Queue Entries:  ", JSON.stringify(queueEntries));
+
+    // FIXME: this query seems to cause an infinite loop when owner entries is empty?
+    // The queue should be empty
+    const aliceEntries: QueueEntriesResponse =
+      await operatorClient.queryContractSmart(redeemProxyAddress, {
+        owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
+      });
+    console.debug("Alice Queue Entries:", aliceEntries);
+
     // Add multiple entries for Alice
-    for (let i = 0; i < 2; i++) {
-      console.log("Alice redeeming 10_000 coins...");
-      await aliceClient.execute(
-        aliceAddress,
-        redeemProxyAddress,
-        { redeem: { vault: vaultAddress } },
-        gasFee,
-        "",
-        [coin(10_000, syntheticAssetDenom)]
-      );
-    }
+    console.log("Alice redeeming 10_000 coins...");
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(10_000, syntheticAssetDenom)]
+    );
+
+    console.log("Alice redeeming 10_000 coins...");
+    await aliceClient.execute(
+      aliceAddress,
+      redeemProxyAddress,
+      { redeem: { vault: vaultAddress } },
+      gasFee,
+      "",
+      [coin(10_000, syntheticAssetDenom)]
+    );
+
+    console.log("Trying to query Alice entries...");
 
     // Verify Alice has an entry
     const aliceEntriesBefore: QueueEntriesResponse =
@@ -854,6 +885,8 @@ describe("Redeem Queue Proxy", () => {
       await operatorClient.queryContractSmart(redeemProxyAddress, {
         owner_queue_entries: { vault: vaultAddress, address: aliceAddress },
       });
+
+    console.log("Alice Entries After:", aliceEntriesBefore);
 
     expect(aliceEntriesAfter.entries.length).toBe(0);
 
