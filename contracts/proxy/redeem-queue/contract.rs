@@ -136,11 +136,9 @@ pub fn handle_redeem(deps: DepsMut, info: MessageInfo, vault: String) -> Result<
         response = response.add_message(msg);
     }
 
-    if !processed.is_empty() {
-        response = response
-            .add_attribute("processed_entries", processed.len().to_string())
-            .add_attribute("used_amount", used_amount);
-    }
+    response = response
+        .add_attribute("processed_entries", processed.len().to_string())
+        .add_attribute("used_amount", used_amount);
 
     Ok(response)
 }
