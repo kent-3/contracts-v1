@@ -195,11 +195,7 @@ pub fn handle_cancel_all(
     let cancelled = queue.cancel_user_entries(info.sender.as_ref())?;
 
     if cancelled.is_empty() {
-        return Ok(Response::default()
-            .add_attribute("kind", "cancel_all")
-            .add_attribute("address", &info.sender)
-            .add_attribute("vault", &vault)
-            .add_attribute("count", "0"));
+        bail!("No entries found for {} in vault {}", info.sender, vault);
     }
 
     // Calculate total amount
