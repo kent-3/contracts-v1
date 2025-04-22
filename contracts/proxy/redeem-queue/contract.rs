@@ -87,11 +87,7 @@ pub fn handle_process_head(deps: DepsMut, vault: String) -> Result<Response, Err
     Ok(response)
 }
 
-pub fn handle_redeem(
-    mut deps: DepsMut,
-    info: MessageInfo,
-    vault: String,
-) -> Result<Response, Error> {
+pub fn handle_redeem(deps: DepsMut, info: MessageInfo, vault: String) -> Result<Response, Error> {
     deps.api.addr_validate(&vault)?;
 
     if info.funds.len() != 1 {
@@ -114,8 +110,6 @@ pub fn handle_redeem(
         );
     }
 
-    let process_head_response = handle_process_head(deps.branch(), vault.clone())?;
-
     let mut queue = RedemptionQueue::new(deps.storage, &vault);
     let index = queue.enqueue(info.sender.as_ref(), coin.amount)?;
 
@@ -126,10 +120,6 @@ pub fn handle_redeem(
         .add_attribute("amount", coin.amount)
         .add_attribute("entry_index", index.to_string());
 
-    for msg in process_head_response.messages {
-        response = response.add_submessage(msg);
-    }
-
     let vault_metadata: VaultMetadata = deps.querier.query_wasm_smart(
         &hub,
         &HubQueryMsg::VaultMetadata {
@@ -139,16 +129,17 @@ pub fn handle_redeem(
     let reserve_balance = vault_metadata.reserve_balance.u128();
     let available_amount = Uint128::new(reserve_balance);
 
-    // NOTE: Using 1 instead of 0 to accommodate precision errors
-    if available_amount > Uint128::one() {
-        let (processed, _used_amount) = queue.process_head(available_amount)?;
+    let (processed, used_amount) = queue.process_head(available_amount)?;
 
-        if !processed.is_empty() {
-            for (address, amount) in processed {
-                let msg = redeem_on_behalf(&hub, &vault, &synthetic, address, amount.u128());
-                response = response.add_message(msg);
-            }
-        }
+    for (address, amount) in processed.iter() {
+        let msg = redeem_on_behalf(&hub, &vault, &synthetic, address.clone(), amount.u128());
+        response = response.add_message(msg);
+    }
+
+    if !processed.is_empty() {
+        response = response
+            .add_attribute("processed_entries", processed.len().to_string())
+            .add_attribute("used_amount", used_amount);
     }
 
     Ok(response)
